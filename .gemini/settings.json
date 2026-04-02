@@ -1,0 +1,88 @@
+{
+  "hooks": {
+    "AfterAgent": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "name": "gemini-remote-bridge",
+            "type": "command",
+            "command": "node .gemini/hooks/gemini-remote-bridge.js"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "name": "gemini-remote-bridge",
+            "type": "command",
+            "command": "node .gemini/hooks/gemini-remote-bridge.js"
+          }
+        ]
+      }
+    ],
+    "AfterModel": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "name": "gemini-remote-bridge",
+            "type": "command",
+            "command": "node .gemini/hooks/gemini-remote-bridge.js"
+          }
+        ]
+      }
+    ],
+    "BeforeTool": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "name": "gemini-remote-bridge",
+            "type": "command",
+            "command": "node .gemini/hooks/gemini-remote-bridge.js"
+          }
+        ]
+      }
+    ],
+    "AfterTool": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "name": "gemini-remote-bridge",
+            "type": "command",
+            "command": "node .gemini/hooks/gemini-remote-bridge.js"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "name": "gemini-remote-bridge",
+            "type": "command",
+            "command": "node .gemini/hooks/gemini-remote-bridge.js"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "name": "gemini-remote-bridge",
+            "type": "command",
+            "command": "node .gemini/hooks/gemini-remote-bridge.js"
+          }
+        ]
+      }
+    ]
+  }
+}

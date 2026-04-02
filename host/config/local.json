@@ -1,0 +1,14 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8918,
+    "databasePath": "./data/gemini-remote.sqlite"
+  },
+  "workspaces": [
+    {
+      "id": "gemini-remote",
+      "name": "Gemini Remote Workspace",
+      "rootPath": "/Users/nandakrishnan/applca/gemini-remote"
+    }
+  ]
+}
