@@ -9,12 +9,14 @@ class AtmosphereScaffold extends StatelessWidget {
     required this.body,
     this.actions,
     this.floatingActionButton,
+    this.showAppBar = true,
   });
 
   final String title;
   final Widget body;
   final List<Widget>? actions;
   final Widget? floatingActionButton;
+  final bool showAppBar;
 
   @override
   Widget build(BuildContext context) {
@@ -23,23 +25,19 @@ class AtmosphereScaffold extends StatelessWidget {
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [
-            Color(0xFFFFF4E8),
-            Color(0xFFF5E7D7),
-            Color(0xFFEFE4DE),
-          ],
+          colors: [Color(0xFFFFF4E8), Color(0xFFF5E7D7), Color(0xFFEFE4DE)],
         ),
       ),
       child: Scaffold(
         backgroundColor: Colors.transparent,
-        appBar: AppBar(
-          title: Text(title),
-          backgroundColor: Colors.transparent,
-          actions: actions,
-        ),
-        body: SafeArea(
-          child: body,
-        ),
+        appBar: showAppBar
+            ? AppBar(
+                title: Text(title),
+                backgroundColor: Colors.transparent,
+                actions: actions,
+              )
+            : null,
+        body: SafeArea(child: body),
         floatingActionButton: floatingActionButton,
       ),
     );
@@ -50,7 +48,7 @@ class SectionCard extends StatelessWidget {
   const SectionCard({
     super.key,
     required this.child,
-    this.padding = const EdgeInsets.all(20),
+    this.padding = const EdgeInsets.all(16),
   });
 
   final Widget child;
@@ -59,20 +57,13 @@ class SectionCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Card(
-      child: Padding(
-        padding: padding,
-        child: child,
-      ),
+      child: Padding(padding: padding, child: child),
     );
   }
 }
 
 class StatusPill extends StatelessWidget {
-  const StatusPill({
-    super.key,
-    required this.label,
-    required this.color,
-  });
+  const StatusPill({super.key, required this.label, required this.color});
 
   final String label;
   final Color color;
@@ -80,7 +71,7 @@ class StatusPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.14),
         borderRadius: BorderRadius.circular(999),
@@ -90,6 +81,7 @@ class StatusPill extends StatelessWidget {
         style: TextStyle(
           color: color,
           fontWeight: FontWeight.w700,
+          fontSize: 12,
         ),
       ),
     );
@@ -97,11 +89,7 @@ class StatusPill extends StatelessWidget {
 }
 
 class EmptyStateCard extends StatelessWidget {
-  const EmptyStateCard({
-    super.key,
-    required this.title,
-    required this.body,
-  });
+  const EmptyStateCard({super.key, required this.title, required this.body});
 
   final String title;
   final String body;
@@ -115,9 +103,9 @@ class EmptyStateCard extends StatelessWidget {
         children: [
           Text(
             title,
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
           ),
           Text(body),
         ],
@@ -164,5 +152,15 @@ String connectionLabel(ConnectionStatus status) {
       return 'Reconnecting';
     case ConnectionStatus.disconnected:
       return 'Offline';
+  }
+}
+
+Color providerColor(String provider) {
+  switch (provider) {
+    case 'codex':
+      return const Color(0xFF7B4D2A);
+    case 'gemini':
+    default:
+      return const Color(0xFF2F5BA8);
   }
 }

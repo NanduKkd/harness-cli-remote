@@ -1,3 +1,7 @@
+import { existsSync, readdirSync, statSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
 import Fastify, { type FastifyRequest } from 'fastify';
@@ -5,9 +9,17 @@ import type WebSocket from 'ws';
 import { z } from 'zod';
 
 import { AppDatabase } from './db.js';
-import { GeminiService } from './geminiService.js';
+import { SessionService } from './sessionService.js';
 import { getHookStatus, installHooks } from './hookInstaller.js';
-import type { BroadcastEnvelope, HookIngressBody, ResolvedConfig } from './types.js';
+import type {
+  BroadcastEnvelope,
+  HookIngressBody,
+  ResolvedConfig,
+  SessionExportRecord,
+  WorkspaceConfig,
+  WorkspaceRecord,
+  WorkspaceRepairRecord,
+} from './types.js';
 import { createPairingCode } from './util.js';
 
 const pairSchema = z.object({
@@ -23,19 +35,44 @@ const promptSchema = z.object({
   prompt: z.string().min(1),
 });
 
+const createWorkspaceSchema = z.object({
+  name: z.string().trim().optional(),
+  rootPath: z.string().trim().min(1),
+  provider: z.enum(['gemini', 'codex']).default('gemini'),
+});
+
+const browseDirectoriesSchema = z.object({
+  path: z.string().trim().optional(),
+});
+
 export async function startServer(config: ResolvedConfig): Promise<void> {
   const app = Fastify({
     logger: true,
   });
   const database = new AppDatabase(config.server.databasePath);
-  const workspaces = new Map(config.workspaces.map((workspace) => [workspace.id, workspace]));
+  const recoveredRuns = database.recoverOrphanedRuns(
+    'The host restarted before this run finished. Start a new session or resend the prompt.',
+  );
+  database.syncWorkspaces(config.workspaces);
+  const workspaces = new Map<string, WorkspaceConfig>();
+  refreshWorkspaceMap(database, workspaces);
   const sockets = new Set<WebSocket>();
   const pairingCode = createPairingCode();
   const daemonUrl = `http://127.0.0.1:${config.server.port}`;
 
-  for (const workspace of config.workspaces) {
+  if (recoveredRuns.length > 0) {
+    app.log.warn(
+      {
+        recoveredRuns,
+        count: recoveredRuns.length,
+      },
+      'Recovered orphaned running sessions from a previous daemon instance',
+    );
+  }
+
+  for (const workspace of workspaces.values()) {
     try {
-      installHooks(workspace.rootPath);
+      installHooks(workspace);
     } catch (error) {
       app.log.warn(
         {
@@ -43,12 +80,10 @@ export async function startServer(config: ResolvedConfig): Promise<void> {
           workspaceId: workspace.id,
           rootPath: workspace.rootPath,
         },
-        'Failed to auto-install Gemini Remote hooks for workspace',
+        'Failed to auto-install workspace hooks',
       );
     }
   }
-
-  database.syncWorkspaces(config.workspaces);
 
   await app.register(cors, {
     origin: true,
@@ -64,7 +99,7 @@ export async function startServer(config: ResolvedConfig): Promise<void> {
     }
   };
 
-  const gemini = new GeminiService(
+  const sessions = new SessionService(
     database,
     workspaces,
     daemonUrl,
@@ -78,6 +113,7 @@ export async function startServer(config: ResolvedConfig): Promise<void> {
 
   app.get('/health', async () => ({
     ok: true,
+    workspaceCount: workspaces.size,
   }));
 
   app.post('/pair', async (request, reply) => {
@@ -128,7 +164,126 @@ export async function startServer(config: ResolvedConfig): Promise<void> {
   });
 
   app.get('/workspaces', async () => {
-    return database.listWorkspaces((rootPath) => getHookStatus(rootPath));
+    return database.listWorkspaces((workspace) => getHookStatus(workspace));
+  });
+
+  app.post('/workspaces', async (request, reply) => {
+    const body = createWorkspaceSchema.parse(request.body);
+    const rootPath = path.resolve(body.rootPath);
+
+    if (!existsSync(rootPath)) {
+      return reply.code(400).send({ error: `Path does not exist: ${rootPath}` });
+    }
+
+    if (!statSync(rootPath).isDirectory()) {
+      return reply.code(400).send({ error: `Path is not a directory: ${rootPath}` });
+    }
+
+    const duplicate = [...workspaces.values()].find(
+      (workspace) =>
+        workspace.rootPath === rootPath && workspace.provider === body.provider,
+    );
+    if (duplicate) {
+      return reply.code(409).send({
+        error: `Workspace already exists for ${body.provider} at ${rootPath}`,
+      });
+    }
+
+    const workspace: WorkspaceConfig = {
+      id: createWorkspaceId(
+        body.name?.trim() || path.basename(rootPath) || 'workspace',
+        body.provider,
+        workspaces,
+      ),
+      name: body.name?.trim() || path.basename(rootPath) || rootPath,
+      rootPath,
+      provider: body.provider,
+    };
+
+    database.upsertWorkspace(workspace);
+    workspaces.set(workspace.id, workspace);
+
+    let warning: string | null = null;
+    try {
+      installHooks(workspace);
+      database.markWorkspaceRepaired(workspace.id, new Date().toISOString());
+    } catch (error) {
+      warning = error instanceof Error ? error.message : String(error);
+      app.log.warn(
+        {
+          err: error,
+          workspaceId: workspace.id,
+          rootPath: workspace.rootPath,
+        },
+        'Failed to auto-install hooks for created workspace',
+      );
+    }
+
+    const stored = database.getWorkspaceOrThrow(workspace.id);
+    const record = toWorkspaceRecord(workspace, stored.repairedAt);
+    return reply.code(201).send(
+      warning == null ? record : { workspace: record, warning },
+    );
+  });
+
+  app.get('/workspaces/browse', async (request, reply) => {
+    const query = browseDirectoriesSchema.parse(request.query);
+
+    let currentPath: string;
+    try {
+      currentPath = resolveDirectoryPath(query.path);
+    } catch (error) {
+      return reply.code(400).send({
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    const directories = readdirSync(currentPath, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => ({
+        name: entry.name,
+        path: path.join(currentPath, entry.name),
+      }))
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .slice(0, 200);
+
+    const parentPath = path.dirname(currentPath);
+    return reply.send({
+      currentPath,
+      parentPath: parentPath === currentPath ? null : parentPath,
+      directories,
+    });
+  });
+
+  app.post('/workspaces/:id/repair', async (request, reply) => {
+    const workspace = workspaces.get((request.params as { id: string }).id);
+    if (!workspace) {
+      return reply.code(404).send({ error: 'Workspace not found' });
+    }
+
+    try {
+      installHooks(workspace);
+    } catch (error) {
+      app.log.warn(
+        {
+          err: error,
+          workspaceId: workspace.id,
+          rootPath: workspace.rootPath,
+        },
+        'Workspace repair failed',
+      );
+      return reply.code(500).send({
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    const repairedAt = new Date().toISOString();
+    database.markWorkspaceRepaired(workspace.id, repairedAt);
+    const repairedWorkspace: WorkspaceRepairRecord = {
+      ...toWorkspaceRecord(workspace, repairedAt),
+      repairedAt,
+    };
+    return reply.send(repairedWorkspace);
   });
 
   app.get('/sessions', async (request) => {
@@ -138,17 +293,17 @@ export async function startServer(config: ResolvedConfig): Promise<void> {
 
   app.post('/sessions', async (request, reply) => {
     const body = createSessionSchema.parse(request.body);
-    const session = gemini.createSession(body.workspaceId, body.prompt);
+    const session = sessions.createSession(body.workspaceId, body.prompt);
     return reply.code(201).send(session);
   });
 
   app.post('/sessions/:id/prompts', async (request) => {
     const body = promptSchema.parse(request.body);
-    return gemini.sendPrompt((request.params as { id: string }).id, body.prompt);
+    return sessions.sendPrompt((request.params as { id: string }).id, body.prompt);
   });
 
   app.post('/sessions/:id/cancel', async (request, reply) => {
-    const ok = gemini.cancelSession((request.params as { id: string }).id);
+    const ok = sessions.cancelSession((request.params as { id: string }).id);
     if (!ok) {
       return reply.code(409).send({ error: 'Session has no active run' });
     }
@@ -161,6 +316,46 @@ export async function startServer(config: ResolvedConfig): Promise<void> {
     return database.getEvents((request.params as { id: string }).id, afterSeq);
   });
 
+  app.get('/sessions/:id/runs', async (request, reply) => {
+    const sessionId = (request.params as { id: string }).id;
+    const session = database.getSession(sessionId);
+    if (!session) {
+      return reply.code(404).send({ error: 'Session not found' });
+    }
+
+    return database.listRuns(session.id);
+  });
+
+  app.get('/sessions/:id/export', async (request, reply) => {
+    const sessionId = (request.params as { id: string }).id;
+    const session = database.getSession(sessionId);
+    if (!session) {
+      return reply.code(404).send({ error: 'Session not found' });
+    }
+
+    const workspace = workspaces.get(session.workspaceId);
+    if (!workspace) {
+      return reply.code(404).send({ error: 'Workspace not found' });
+    }
+
+    const payload: SessionExportRecord = {
+      exportedAt: new Date().toISOString(),
+      workspace: toWorkspaceRecord(
+        workspace,
+        database.getWorkspace(workspace.id)?.repairedAt,
+      ),
+      session,
+      runs: database.listRuns(session.id),
+      events: database.getEvents(session.id, 0),
+    };
+
+    reply.header(
+      'content-disposition',
+      `attachment; filename="session-${session.id}.json"`,
+    );
+    return reply.send(payload);
+  });
+
   app.post('/internal/hooks', async (request, reply) => {
     const token = request.headers['x-hook-token'];
     if (typeof token !== 'string' || token.length === 0) {
@@ -169,7 +364,7 @@ export async function startServer(config: ResolvedConfig): Promise<void> {
 
     const body = request.body as HookIngressBody;
     try {
-      const events = gemini.handleHookIngress(token, body);
+      const events = sessions.handleHookIngress(token, body);
       return reply.send({ ok: true, events: events.length });
     } catch (error) {
       app.log.warn({ err: error }, 'Hook ingress rejected');
@@ -187,9 +382,13 @@ export async function startServer(config: ResolvedConfig): Promise<void> {
   app.log.info(
     {
       configPath: config.configPath,
-      workspaces: config.workspaces.map((workspace) => workspace.rootPath),
+      workspaces: [...workspaces.values()].map((workspace) => ({
+        id: workspace.id,
+        provider: workspace.provider,
+        rootPath: workspace.rootPath,
+      })),
     },
-    'Gemini Remote host started',
+    'Remote host started',
   );
   app.log.info(
     `Pairing code: ${pairingCode}. Use the Flutter app Pair screen to connect.`,
@@ -206,4 +405,74 @@ function isAuthorized(
   }
 
   return database.validateToken(auth.slice('Bearer '.length));
+}
+
+function toWorkspaceRecord(
+  workspace: WorkspaceConfig,
+  repairedAt?: string | null,
+): WorkspaceRecord {
+  return {
+    ...workspace,
+    repairedAt,
+    hookStatus: getHookStatus(workspace),
+  };
+}
+
+function refreshWorkspaceMap(
+  database: AppDatabase,
+  workspaces: Map<string, WorkspaceConfig>,
+): void {
+  workspaces.clear();
+  for (const workspace of database.listWorkspaceConfigs()) {
+    workspaces.set(workspace.id, workspace);
+  }
+}
+
+function createWorkspaceId(
+  name: string,
+  provider: WorkspaceConfig['provider'],
+  workspaces: Map<string, WorkspaceConfig>,
+): string {
+  const base = `${slugify(name)}-${provider}`;
+  let candidate = base;
+  let index = 2;
+
+  while (workspaces.has(candidate)) {
+    candidate = `${base}-${index}`;
+    index += 1;
+  }
+
+  return candidate;
+}
+
+function slugify(value: string): string {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return normalized || 'workspace';
+}
+
+function resolveDirectoryPath(inputPath?: string): string {
+  const initial = inputPath && inputPath.length > 0 ? inputPath : os.homedir();
+  let candidate = path.resolve(initial);
+
+  while (!existsSync(candidate) && candidate !== path.dirname(candidate)) {
+    candidate = path.dirname(candidate);
+  }
+
+  if (!existsSync(candidate)) {
+    throw new Error(`Path does not exist: ${initial}`);
+  }
+
+  if (!statSync(candidate).isDirectory()) {
+    candidate = path.dirname(candidate);
+  }
+
+  if (!existsSync(candidate) || !statSync(candidate).isDirectory()) {
+    throw new Error(`Path is not a directory: ${initial}`);
+  }
+
+  return candidate;
 }

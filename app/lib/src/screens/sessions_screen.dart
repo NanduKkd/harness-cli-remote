@@ -7,10 +7,7 @@ import '../widgets/chrome.dart';
 import 'session_detail_screen.dart';
 
 class SessionsScreen extends ConsumerWidget {
-  const SessionsScreen({
-    super.key,
-    required this.workspace,
-  });
+  const SessionsScreen({super.key, required this.workspace});
 
   final Workspace workspace;
 
@@ -31,12 +28,12 @@ class SessionsScreen extends ConsumerWidget {
           data: (items) {
             if (items.isEmpty) {
               return ListView(
-                padding: const EdgeInsets.all(20),
+                padding: const EdgeInsets.all(10),
                 children: [
                   EmptyStateCard(
                     title: 'No sessions yet',
                     body: workspace.hookStatus == 'installed'
-                        ? 'Start a new Gemini turn for this workspace.'
+                        ? 'Start a new ${providerDisplayName(workspace.provider)} turn for this workspace.'
                         : 'Bootstrap hooks on the host before creating sessions.',
                   ),
                 ],
@@ -44,11 +41,15 @@ class SessionsScreen extends ConsumerWidget {
             }
 
             return ListView.separated(
-              padding: const EdgeInsets.all(20),
+              padding: const EdgeInsets.all(10),
               itemBuilder: (context, index) {
                 final session = items[index];
+                final statusLabel = messageStatusLabel(
+                  session.lastMessageStatus,
+                );
+                final statusTone = statusColor(session.lastMessageStatus);
                 return InkWell(
-                  borderRadius: BorderRadius.circular(24),
+                  borderRadius: BorderRadius.circular(16),
                   onTap: () {
                     Navigator.of(context).push(
                       MaterialPageRoute<void>(
@@ -60,51 +61,50 @@ class SessionsScreen extends ConsumerWidget {
                     );
                   },
                   child: SectionCard(
+                    padding: const EdgeInsets.fromLTRB(10, 10, 10, 9),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
-                      spacing: 10,
+                      spacing: 6,
                       children: [
                         Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Expanded(
                               child: Text(
                                 session.id,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .titleMedium
+                                style: Theme.of(context).textTheme.titleSmall
                                     ?.copyWith(fontWeight: FontWeight.w700),
                               ),
                             ),
-                            StatusPill(
-                              label: session.status,
-                              color: statusColor(session.status),
+                            const SizedBox(width: 10),
+                            Text(
+                              statusLabel,
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(
+                                    color: statusTone,
+                                    fontWeight: FontWeight.w700,
+                                  ),
                             ),
                           ],
                         ),
                         Text(
-                          'Updated ${_formatTime(session.updatedAt)}',
+                          'Last Updated ${_formatTime(session.lastActivityAt)}',
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
-                        if (session.geminiSessionId != null)
-                          Text(
-                            'Gemini session: ${session.geminiSessionId}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
                       ],
                     ),
                   ),
                 );
               },
-              separatorBuilder: (_, _) => const SizedBox(height: 14),
+              separatorBuilder: (_, _) => const SizedBox(height: 8),
               itemCount: items.length,
             );
           },
           loading: () => const Center(child: CircularProgressIndicator()),
           error: (error, _) => ListView(
-            padding: const EdgeInsets.all(20),
+            padding: const EdgeInsets.all(10),
             children: [
               EmptyStateCard(
                 title: 'Could not load sessions',
@@ -130,33 +130,31 @@ class SessionsScreen extends ConsumerWidget {
       builder: (context) {
         return Padding(
           padding: EdgeInsets.only(
-            left: 20,
-            right: 20,
-            top: 20,
-            bottom: 20 + MediaQuery.viewInsetsOf(context).bottom,
+            left: 14,
+            right: 14,
+            top: 14,
+            bottom: 14 + MediaQuery.viewInsetsOf(context).bottom,
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
-            spacing: 12,
+            spacing: 10,
             children: [
               Text(
-                'Start a remote Gemini session',
-                style: Theme.of(context)
-                    .textTheme
-                    .titleLarge
-                    ?.copyWith(fontWeight: FontWeight.w700),
+                'Start a remote ${providerDisplayName(workspace.provider)} session',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
               ),
               TextField(
                 controller: controller,
-                minLines: 3,
-                maxLines: 6,
-                decoration: const InputDecoration(
-                  labelText: 'Initial prompt',
-                ),
+                minLines: 2,
+                maxLines: 5,
+                decoration: const InputDecoration(labelText: 'Initial prompt'),
               ),
               FilledButton(
-                onPressed: () => Navigator.of(context).pop(controller.text.trim()),
+                onPressed: () =>
+                    Navigator.of(context).pop(controller.text.trim()),
                 child: const Text('Start session'),
               ),
             ],
@@ -178,18 +176,16 @@ class SessionsScreen extends ConsumerWidget {
       if (context.mounted) {
         Navigator.of(context).push(
           MaterialPageRoute<void>(
-            builder: (_) => SessionDetailScreen(
-              workspace: workspace,
-              session: session,
-            ),
+            builder: (_) =>
+                SessionDetailScreen(workspace: workspace, session: session),
           ),
         );
       }
     } catch (error) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(error.toString())),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.toString())));
       }
     }
   }
@@ -197,9 +193,9 @@ class SessionsScreen extends ConsumerWidget {
   void _onNewSessionPressed(BuildContext context, WidgetRef ref) {
     if (workspace.hookStatus != 'installed') {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(
-            'This workspace is not ready yet. The host needs the Gemini Remote hook bridge installed before sessions can start.',
+            'This workspace is not ready yet. The host needs the ${providerDisplayName(workspace.provider)} hook bridge installed before sessions can start.',
           ),
         ),
       );

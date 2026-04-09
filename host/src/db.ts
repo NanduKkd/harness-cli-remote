@@ -17,11 +17,14 @@ import { createAccessToken, nowIso, sha256 } from './util.js';
 type RawSessionRow = {
   id: string;
   workspace_id: string;
+  provider_session_id: string | null;
   gemini_session_id: string | null;
   transcript_path: string | null;
   status: SessionStatus;
+  last_message_status: RunStatus | 'idle' | null;
   created_at: string;
   updated_at: string;
+  last_activity_at: string | null;
   last_run_id: string | null;
 };
 
@@ -42,6 +45,8 @@ type RawWorkspaceRow = {
   id: string;
   name: string;
   root_path: string;
+  provider: WorkspaceConfig['provider'];
+  last_repaired_at: string | null;
 };
 
 export class AppDatabase {
@@ -64,7 +69,9 @@ export class AppDatabase {
       CREATE TABLE IF NOT EXISTS workspaces (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
-        root_path TEXT NOT NULL
+        root_path TEXT NOT NULL,
+        provider TEXT NOT NULL DEFAULT 'gemini',
+        last_repaired_at TEXT
       );
 
       CREATE TABLE IF NOT EXISTS auth_tokens (
@@ -76,6 +83,7 @@ export class AppDatabase {
       CREATE TABLE IF NOT EXISTS sessions (
         id TEXT PRIMARY KEY,
         workspace_id TEXT NOT NULL,
+        provider_session_id TEXT,
         gemini_session_id TEXT,
         transcript_path TEXT,
         status TEXT NOT NULL,
@@ -121,15 +129,38 @@ export class AppDatabase {
       CREATE INDEX IF NOT EXISTS idx_events_session
       ON session_events(session_id, seq ASC);
     `);
+
+    this.ensureColumn('workspaces', 'provider', `TEXT NOT NULL DEFAULT 'gemini'`);
+    this.ensureColumn('workspaces', 'last_repaired_at', 'TEXT');
+    this.ensureColumn('sessions', 'provider_session_id', 'TEXT');
+  }
+
+  private ensureColumn(
+    tableName: string,
+    columnName: string,
+    columnDefinition: string,
+  ): void {
+    const columns = this.db
+      .prepare<[], { name: string }>(`PRAGMA table_info(${tableName})`)
+      .all();
+
+    if (columns.some((column) => column.name === columnName)) {
+      return;
+    }
+
+    this.db.exec(
+      `ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition}`,
+    );
   }
 
   syncWorkspaces(workspaces: WorkspaceConfig[]): void {
     const upsert = this.db.prepare(`
-      INSERT INTO workspaces (id, name, root_path)
-      VALUES (@id, @name, @rootPath)
+      INSERT INTO workspaces (id, name, root_path, provider)
+      VALUES (@id, @name, @rootPath, @provider)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
-        root_path = excluded.root_path
+        root_path = excluded.root_path,
+        provider = excluded.provider
     `);
 
     const tx = this.db.transaction(() => {
@@ -142,11 +173,13 @@ export class AppDatabase {
   }
 
   listWorkspaces(
-    hookStatusResolver: (rootPath: string) => WorkspaceRecord['hookStatus'],
+    hookStatusResolver: (
+      workspace: WorkspaceConfig,
+    ) => WorkspaceRecord['hookStatus'],
   ): WorkspaceRecord[] {
     const rows = this.db
       .prepare<[], RawWorkspaceRow>(
-        'SELECT id, name, root_path FROM workspaces ORDER BY name ASC',
+        'SELECT id, name, root_path, provider, last_repaired_at FROM workspaces ORDER BY name ASC',
       )
       .all();
 
@@ -154,8 +187,87 @@ export class AppDatabase {
       id: row.id,
       name: row.name,
       rootPath: row.root_path,
-      hookStatus: hookStatusResolver(row.root_path),
+      provider: row.provider ?? 'gemini',
+      repairedAt: row.last_repaired_at,
+      hookStatus: hookStatusResolver({
+        id: row.id,
+        name: row.name,
+        rootPath: row.root_path,
+        provider: row.provider ?? 'gemini',
+      }),
     }));
+  }
+
+  getWorkspace(id: string): WorkspaceRecord | null {
+    const row = this.db
+      .prepare<[string], RawWorkspaceRow>(
+        'SELECT id, name, root_path, provider, last_repaired_at FROM workspaces WHERE id = ?',
+      )
+      .get(id);
+
+    if (!row) {
+      return null;
+    }
+
+    return {
+      id: row.id,
+      name: row.name,
+      rootPath: row.root_path,
+      provider: row.provider ?? 'gemini',
+      repairedAt: row.last_repaired_at,
+      hookStatus: 'missing',
+    };
+  }
+
+  listWorkspaceConfigs(): WorkspaceConfig[] {
+    const rows = this.db
+      .prepare<[], RawWorkspaceRow>(
+        'SELECT id, name, root_path, provider, last_repaired_at FROM workspaces ORDER BY name ASC',
+      )
+      .all();
+
+    return rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      rootPath: row.root_path,
+      provider: row.provider ?? 'gemini',
+    }));
+  }
+
+  upsertWorkspace(workspace: WorkspaceConfig): WorkspaceRecord {
+    this.db
+      .prepare(
+        `INSERT INTO workspaces (id, name, root_path, provider)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           name = excluded.name,
+           root_path = excluded.root_path,
+           provider = excluded.provider`,
+      )
+      .run(
+        workspace.id,
+        workspace.name,
+        workspace.rootPath,
+        workspace.provider,
+      );
+
+    return this.getWorkspaceOrThrow(workspace.id);
+  }
+
+  getWorkspaceOrThrow(id: string): WorkspaceRecord {
+    const workspace = this.getWorkspace(id);
+    if (!workspace) {
+      throw new Error(`Workspace not found: ${id}`);
+    }
+    return workspace;
+  }
+
+  markWorkspaceRepaired(workspaceId: string, repairedAt: string): void {
+    this.db
+      .prepare(
+        'UPDATE workspaces SET last_repaired_at = ? WHERE id = ?',
+      )
+      .run(repairedAt, workspaceId);
   }
 
   issueToken(): string {
@@ -190,8 +302,8 @@ export class AppDatabase {
     this.db
       .prepare(
         `INSERT INTO sessions
-        (id, workspace_id, gemini_session_id, transcript_path, status, created_at, updated_at, last_run_id)
-        VALUES (?, ?, NULL, NULL, ?, ?, ?, NULL)`,
+        (id, workspace_id, provider_session_id, gemini_session_id, transcript_path, status, created_at, updated_at, last_run_id)
+        VALUES (?, ?, NULL, NULL, NULL, ?, ?, ?, NULL)`,
       )
       .run(id, workspaceId, 'idle', now, now);
 
@@ -201,7 +313,7 @@ export class AppDatabase {
   getSessionOrThrow(id: string): SessionRecord {
     const row = this.db
       .prepare<[string], RawSessionRow>(
-        `SELECT id, workspace_id, gemini_session_id, transcript_path, status, created_at, updated_at, last_run_id
+        `${sessionSelectSql}
          FROM sessions WHERE id = ?`,
       )
       .get(id);
@@ -216,7 +328,7 @@ export class AppDatabase {
   getSession(id: string): SessionRecord | null {
     const row = this.db
       .prepare<[string], RawSessionRow>(
-        `SELECT id, workspace_id, gemini_session_id, transcript_path, status, created_at, updated_at, last_run_id
+        `${sessionSelectSql}
          FROM sessions WHERE id = ?`,
       )
       .get(id);
@@ -226,14 +338,101 @@ export class AppDatabase {
   listSessions(workspaceId: string): SessionRecord[] {
     const rows = this.db
       .prepare<[string], RawSessionRow>(
-        `SELECT id, workspace_id, gemini_session_id, transcript_path, status, created_at, updated_at, last_run_id
+        `${sessionSelectSql}
          FROM sessions
          WHERE workspace_id = ?
-         ORDER BY updated_at DESC`,
+         ORDER BY last_activity_at DESC, updated_at DESC`,
       )
       .all(workspaceId);
 
     return rows.map(mapSession);
+  }
+
+  listRuns(sessionId: string): RunRecord[] {
+    const rows = this.db
+      .prepare<[string], RawRunRow>(
+        `SELECT id, session_id, status, prompt, started_at, ended_at, exit_code, cancelled_by_user, stdout_tail, stderr_tail
+         FROM runs
+         WHERE session_id = ?
+         ORDER BY started_at DESC, rowid DESC`,
+      )
+      .all(sessionId);
+
+    return rows.map(mapRun);
+  }
+
+  recoverOrphanedRuns(reason: string): Array<{
+    sessionId: string;
+    runId: string;
+  }> {
+    const runningRuns = this.db
+      .prepare<
+        [],
+        {
+          id: string;
+          session_id: string;
+          stdout_tail: string | null;
+          stderr_tail: string | null;
+        }
+      >(
+        `SELECT id, session_id, stdout_tail, stderr_tail
+         FROM runs
+         WHERE status = 'running'
+         ORDER BY started_at ASC, rowid ASC`,
+      )
+      .all();
+
+    if (runningRuns.length === 0) {
+      return [];
+    }
+
+    const recoveredAt = nowIso();
+    const recovered: Array<{ sessionId: string; runId: string }> = [];
+    const tx = this.db.transaction(() => {
+      for (const run of runningRuns) {
+        const stderrTail = [run.stderr_tail?.trim(), reason]
+          .filter((value): value is string => value != null && value.length > 0)
+          .join('\n');
+
+        this.db
+          .prepare(
+            `UPDATE runs
+             SET status = 'failed', ended_at = ?, exit_code = NULL, stderr_tail = ?
+             WHERE id = ?`,
+          )
+          .run(recoveredAt, stderrTail, run.id);
+
+        this.db
+          .prepare(
+            `UPDATE sessions
+             SET status = 'failed', updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(recoveredAt, run.session_id);
+
+        this.insertEvent(
+          run.session_id,
+          run.id,
+          'run.failed',
+          {
+            exitCode: null,
+            signal: 'startup-recovery',
+            stdoutTail: run.stdout_tail ?? '',
+            stderrTail,
+            recovered: true,
+          },
+          recoveredAt,
+        );
+
+        recovered.push({
+          sessionId: run.session_id,
+          runId: run.id,
+        });
+      }
+    });
+
+    tx();
+    return recovered;
   }
 
   createRun(id: string, sessionId: string, prompt: string): RunRecord {
@@ -339,6 +538,7 @@ export class AppDatabase {
   updateSessionMetadata(
     sessionId: string,
     input: {
+      providerSessionId?: string | null;
       geminiSessionId?: string | null;
       transcriptPath?: string | null;
       status?: SessionStatus;
@@ -346,6 +546,10 @@ export class AppDatabase {
   ): SessionRecord {
     const session = this.getSessionOrThrow(sessionId);
     const next = {
+      providerSessionId:
+        input.providerSessionId === undefined
+          ? session.providerSessionId
+          : input.providerSessionId,
       geminiSessionId:
         input.geminiSessionId === undefined
           ? session.geminiSessionId
@@ -361,10 +565,11 @@ export class AppDatabase {
     this.db
       .prepare(
         `UPDATE sessions
-         SET gemini_session_id = ?, transcript_path = ?, status = ?, updated_at = ?
+         SET provider_session_id = ?, gemini_session_id = ?, transcript_path = ?, status = ?, updated_at = ?
          WHERE id = ?`,
       )
       .run(
+        next.providerSessionId,
         next.geminiSessionId,
         next.transcriptPath,
         next.status,
@@ -481,13 +686,83 @@ function mapSession(row: RawSessionRow): SessionRecord {
   return {
     id: row.id,
     workspaceId: row.workspace_id,
+    providerSessionId: row.provider_session_id ?? row.gemini_session_id,
     geminiSessionId: row.gemini_session_id,
     transcriptPath: row.transcript_path,
     status: row.status,
+    lastMessageStatus: row.last_message_status ?? inferMessageStatus(row.status),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    lastActivityAt: row.last_activity_at ?? row.updated_at,
     lastRunId: row.last_run_id,
   };
+}
+
+const sessionSelectSql = `
+  SELECT
+    id,
+    workspace_id,
+    provider_session_id,
+    gemini_session_id,
+    transcript_path,
+    status,
+    COALESCE(
+      (
+        SELECT CASE
+          WHEN type = 'run.started' THEN 'running'
+          WHEN type = 'run.failed' THEN 'failed'
+          WHEN type = 'run.cancelled' THEN 'cancelled'
+          WHEN type = 'run.completed' THEN 'completed'
+          WHEN type = 'message.completed' THEN 'completed'
+          ELSE NULL
+        END
+        FROM session_events
+        WHERE session_id = sessions.id
+          AND type IN (
+            'run.started',
+            'run.failed',
+            'run.cancelled',
+            'run.completed',
+            'message.completed'
+          )
+        ORDER BY seq DESC
+        LIMIT 1
+      ),
+      CASE
+        WHEN status = 'running' THEN 'running'
+        WHEN status = 'failed' THEN 'failed'
+        WHEN status = 'cancelled' THEN 'cancelled'
+        WHEN last_run_id IS NULL THEN 'idle'
+        ELSE 'completed'
+      END
+    ) AS last_message_status,
+    created_at,
+    updated_at,
+    COALESCE(
+      (
+        SELECT ts
+        FROM session_events
+        WHERE session_id = sessions.id
+        ORDER BY seq DESC
+        LIMIT 1
+      ),
+      updated_at
+    ) AS last_activity_at,
+    last_run_id
+`;
+
+function inferMessageStatus(status: SessionStatus): RunStatus | 'idle' {
+  switch (status) {
+    case 'running':
+      return 'running';
+    case 'failed':
+      return 'failed';
+    case 'cancelled':
+      return 'cancelled';
+    case 'idle':
+    default:
+      return 'idle';
+  }
 }
 
 function mapRun(row: RawRunRow): RunRecord {

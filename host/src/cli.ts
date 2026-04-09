@@ -9,8 +9,10 @@ async function main(): Promise<void> {
 
   if (command === 'bootstrap') {
     for (const workspace of config.workspaces) {
-      installHooks(workspace.rootPath);
-      process.stdout.write(`Installed hooks in ${workspace.rootPath}\n`);
+      installHooks(workspace);
+      process.stdout.write(
+        `Installed ${workspace.provider} hooks in ${workspace.rootPath}\n`,
+      );
     }
     return;
   }

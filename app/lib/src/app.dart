@@ -13,7 +13,7 @@ class GeminiRemoteApp extends ConsumerWidget {
     final authState = ref.watch(authControllerProvider);
     ref.read(realtimeServiceProvider).configure(authState.valueOrNull);
 
-    final theme = ThemeData(
+    final baseTheme = ThemeData(
       useMaterial3: true,
       colorScheme: ColorScheme.fromSeed(
         seedColor: const Color(0xFFCD6A33),
@@ -25,21 +25,33 @@ class GeminiRemoteApp extends ConsumerWidget {
         color: Colors.white,
         margin: EdgeInsets.zero,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.all(Radius.circular(24)),
+          borderRadius: BorderRadius.all(Radius.circular(20)),
         ),
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: Colors.white,
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: BorderRadius.circular(16),
           borderSide: BorderSide.none,
         ),
       ),
     );
+    final theme = baseTheme.copyWith(
+      textTheme: baseTheme.textTheme.apply(
+        bodyColor: const Color(0xFF2E2B27),
+        displayColor: const Color(0xFF2E2B27),
+      ),
+      appBarTheme: baseTheme.appBarTheme.copyWith(
+        titleTextStyle: baseTheme.textTheme.titleLarge?.copyWith(
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+      visualDensity: const VisualDensity(horizontal: -1, vertical: -1),
+    );
 
     return MaterialApp(
-      title: 'Gemini Remote',
+      title: 'CLI Remote',
       theme: theme,
       debugShowCheckedModeBanner: false,
       home: authState.when(
@@ -57,10 +69,6 @@ class _SplashScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(
-      body: Center(
-        child: CircularProgressIndicator(),
-      ),
-    );
+    return const Scaffold(body: Center(child: CircularProgressIndicator()));
   }
 }

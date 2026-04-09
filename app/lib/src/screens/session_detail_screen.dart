@@ -2,11 +2,13 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models.dart';
 import '../state/app_state.dart';
 import '../widgets/chrome.dart';
+import '../widgets/json_export_sheet.dart';
 
 class SessionDetailScreen extends ConsumerStatefulWidget {
   const SessionDetailScreen({
@@ -30,6 +32,7 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
   StreamSubscription<ConnectionStatus>? _statusSubscription;
   bool _loading = true;
   bool _sending = false;
+  bool _exporting = false;
   String? _error;
   int _lastSeq = 0;
   ConnectionStatus _connectionStatus = ConnectionStatus.disconnected;
@@ -42,7 +45,8 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
     _connectionStatus = realtime.status;
     _messageSubscription = realtime.messages.listen(_handleRealtimeEvent);
     _statusSubscription = realtime.statuses.listen((status) async {
-      final shouldCatchUp = _connectionStatus != ConnectionStatus.connected &&
+      final shouldCatchUp =
+          _connectionStatus != ConnectionStatus.connected &&
           status == ConnectionStatus.connected;
       if (mounted) {
         setState(() {
@@ -69,17 +73,27 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
     final liveText = _liveText();
     final entries = _conversationEntries(liveText);
     final isRunning = _isRunning();
+    final messageStatus = _currentMessageStatus();
+    final messageStatusTone = statusColor(messageStatus);
+    final lastActivityAt = _latestActivityAt();
 
     return AtmosphereScaffold(
       title: 'Session',
+      showAppBar: false,
       body: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+            padding: const EdgeInsets.fromLTRB(10, 10, 10, 0),
             child: SectionCard(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              padding: const EdgeInsets.fromLTRB(6, 6, 8, 6),
               child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  IconButton(
+                    onPressed: () => Navigator.of(context).maybePop(),
+                    tooltip: 'Back',
+                    icon: const Icon(Icons.arrow_back_rounded),
+                  ),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -89,44 +103,73 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
                           widget.workspace.name,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context)
-                              .textTheme
-                              .titleMedium
+                          style: Theme.of(context).textTheme.titleMedium
                               ?.copyWith(fontWeight: FontWeight.w700),
                         ),
-                        const SizedBox(height: 4),
-                        Text(
-                          _sessionMetaLine(),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodySmall,
+                        const SizedBox(height: 3),
+                        Wrap(
+                          spacing: 10,
+                          runSpacing: 2,
+                          children: [
+                            Text(
+                              messageStatusLabel(messageStatus),
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(
+                                    color: messageStatusTone,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                            ),
+                            Text(
+                              _formatTime(lastActivityAt),
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ],
                         ),
                       ],
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  StatusPill(
-                    label: connectionLabel(_connectionStatus),
-                    color: connectionColor(_connectionStatus),
-                  ),
-                  IconButton(
-                    onPressed: () => _showSessionInfo(context),
-                    tooltip: 'Session details',
-                    icon: const Icon(Icons.info_outline_rounded),
+                  const SizedBox(width: 6),
+                  PopupMenuButton<_SessionDetailAction>(
+                    tooltip: 'Conversation actions',
+                    icon: _exporting
+                        ? const SizedBox(
+                            height: 18,
+                            width: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.more_vert_rounded),
+                    onSelected: (action) {
+                      if (_exporting) {
+                        return;
+                      }
+                      if (action == _SessionDetailAction.downloadCurrent) {
+                        _showExport();
+                      } else if (action == _SessionDetailAction.refresh) {
+                        _refreshConversation();
+                      }
+                    },
+                    itemBuilder: (context) => [
+                      const PopupMenuItem<_SessionDetailAction>(
+                        value: _SessionDetailAction.downloadCurrent,
+                        child: Text('Download Screen (current)'),
+                      ),
+                      const PopupMenuItem<_SessionDetailAction>(
+                        value: _SessionDetailAction.refresh,
+                        child: Text('Refresh'),
+                      ),
+                    ],
                   ),
                 ],
               ),
             ),
           ),
-          Expanded(
-            child: _buildConversation(context, entries),
-          ),
+          Expanded(child: _buildConversation(context, entries)),
           SafeArea(
             top: false,
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+              padding: const EdgeInsets.fromLTRB(10, 6, 10, 10),
               child: SectionCard(
-                padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+                padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
@@ -145,20 +188,20 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
                           hintText: 'Send a follow-up prompt',
                           isDense: true,
                           contentPadding: EdgeInsets.symmetric(
-                            horizontal: 14,
-                            vertical: 12,
+                            horizontal: 12,
+                            vertical: 10,
                           ),
                         ),
                       ),
                     ),
-                    const SizedBox(width: 12),
+                    const SizedBox(width: 8),
                     FilledButton(
                       onPressed: _sending || isRunning ? null : _sendPrompt,
                       style: FilledButton.styleFrom(
-                        minimumSize: const Size(0, 46),
+                        minimumSize: const Size(0, 42),
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 12,
+                          horizontal: 14,
+                          vertical: 10,
                         ),
                       ),
                       child: _sending
@@ -170,14 +213,14 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
                           : const Icon(Icons.send_rounded),
                     ),
                     if (isRunning) ...[
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 6),
                       OutlinedButton(
                         onPressed: _cancelSession,
                         style: OutlinedButton.styleFrom(
-                          minimumSize: const Size(0, 46),
+                          minimumSize: const Size(0, 42),
                           padding: const EdgeInsets.symmetric(
-                            horizontal: 14,
-                            vertical: 12,
+                            horizontal: 12,
+                            vertical: 10,
                           ),
                         ),
                         child: const Icon(Icons.stop_circle_outlined),
@@ -203,54 +246,53 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
 
     if (_error != null) {
       return ListView(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(10),
         children: [
-          EmptyStateCard(
-            title: 'Could not load conversation',
-            body: _error!,
-          ),
+          EmptyStateCard(title: 'Could not load conversation', body: _error!),
         ],
       );
     }
 
     if (entries.isEmpty) {
       return ListView(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(10),
         children: const [
           EmptyStateCard(
             title: 'Nothing yet',
             body:
-                'Your prompts, Gemini replies, tool activity, and session notices will appear here as a readable conversation.',
+                'Your prompts, replies, tool activity, and session notices will appear here as a readable conversation.',
           ),
         ],
       );
     }
 
     return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
       itemCount: entries.length,
-      separatorBuilder: (_, _) => const SizedBox(height: 12),
+      separatorBuilder: (_, _) => const SizedBox(height: 6),
       itemBuilder: (context, index) {
         final entry = entries[index];
         return switch (entry.kind) {
           _TranscriptEntryKind.user => _MessageBubble(
-              entry: entry,
-              alignment: Alignment.centerRight,
-              backgroundColor: const Color(0xFFE36A39),
-              foregroundColor: Colors.white,
-            ),
+            entry: entry,
+            alignment: Alignment.centerRight,
+            backgroundColor: const Color(0xFFE36A39),
+            foregroundColor: Colors.white,
+            renderMarkdown: false,
+          ),
           _TranscriptEntryKind.assistant => _MessageBubble(
-              entry: entry,
-              alignment: Alignment.centerLeft,
-              backgroundColor: Colors.white,
-              foregroundColor: const Color(0xFF2E2B27),
-            ),
+            entry: entry,
+            alignment: Alignment.centerLeft,
+            backgroundColor: Colors.white,
+            foregroundColor: const Color(0xFF2E2B27),
+            renderMarkdown: !entry.isLive,
+          ),
           _TranscriptEntryKind.tool => _ToolCallCard(
-              key: ValueKey(
-                '${entry.title}-${entry.ts.toIso8601String()}-${entry.state}',
-              ),
-              entry: entry,
+            key: ValueKey(
+              '${entry.title}-${entry.ts.toIso8601String()}-${entry.state}',
             ),
+            entry: entry,
+          ),
           _TranscriptEntryKind.system => _SystemEventCard(entry: entry),
         };
       },
@@ -261,17 +303,14 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
     final entries = <_TranscriptEntry>[];
     final openToolIndexes = <String, List<int>>{};
 
-    for (final event in _events.where((event) => event.type != 'message.delta')) {
+    for (final event in _events.where(
+      (event) => event.type != 'message.delta',
+    )) {
       switch (event.type) {
         case 'run.started':
           final prompt = _textOrNull(event.payload['prompt']);
           if (prompt != null) {
-            entries.add(
-              _TranscriptEntry.user(
-                text: prompt,
-                ts: event.ts,
-              ),
-            );
+            entries.add(_TranscriptEntry.user(text: prompt, ts: event.ts));
           }
         case 'message.completed':
           final text = _textOrNull(event.payload['text']);
@@ -279,6 +318,7 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
             _appendEntry(
               entries,
               _TranscriptEntry.assistant(
+                title: providerDisplayName(widget.workspace.provider),
                 text: text,
                 ts: event.ts,
               ),
@@ -290,8 +330,9 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
             toolName: toolName,
             ts: event.ts,
             state: _ToolState.running,
-            requestSummary:
-                _prettySummary(event.payload['toolInput'] ?? event.payload['toolInputSummary']),
+            requestSummary: _prettySummary(
+              event.payload['toolInput'] ?? event.payload['toolInputSummary'],
+            ),
             responseSummary: null,
           );
           entries.add(entry);
@@ -307,8 +348,9 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
             toolName: toolName,
             ts: event.ts,
             state: state,
-            requestSummary:
-                _prettySummary(event.payload['toolInput'] ?? event.payload['toolInputSummary']),
+            requestSummary: _prettySummary(
+              event.payload['toolInput'] ?? event.payload['toolInputSummary'],
+            ),
             responseSummary: _prettyToolResponse(event.payload),
           );
           final stack = openToolIndexes[_toolKey(event.runId, toolName)];
@@ -335,8 +377,9 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
           entries.add(
             _TranscriptEntry.system(
               title: 'Run failed',
-              body: _prettySummary(event.payload['stderrTail']) ??
-                  'Gemini did not finish this turn successfully.',
+              body:
+                  _prettySummary(event.payload['stderrTail']) ??
+                  '${providerDisplayName(widget.workspace.provider)} did not finish this turn successfully.',
               ts: event.ts,
               tone: _SystemTone.error,
             ),
@@ -365,6 +408,7 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
       _appendEntry(
         entries,
         _TranscriptEntry.assistant(
+          title: providerDisplayName(widget.workspace.provider),
           text: liveText,
           ts: _liveTimestamp(),
           isLive: true,
@@ -374,7 +418,7 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
       _appendEntry(
         entries,
         _TranscriptEntry.system(
-          title: 'Gemini is working',
+          title: '${providerDisplayName(widget.workspace.provider)} is working',
           body: 'Waiting for the next streamed chunk from the active run.',
           ts: _liveTimestamp(),
           tone: _SystemTone.info,
@@ -385,51 +429,73 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
     return entries;
   }
 
-  String _sessionMetaLine() {
-    if (widget.session.geminiSessionId != null) {
-      return 'Gemini ${_shortId(widget.session.geminiSessionId!)}';
+  String _currentMessageStatus() {
+    for (final event in _events.reversed) {
+      switch (event.type) {
+        case 'message.delta':
+        case 'run.started':
+          return 'running';
+        case 'run.completed':
+        case 'message.completed':
+          return 'completed';
+        case 'run.failed':
+          return 'failed';
+        case 'run.cancelled':
+          return 'cancelled';
+        default:
+          break;
+      }
     }
-    return 'Session ${_shortId(widget.session.id)}';
+    return widget.session.lastMessageStatus;
   }
 
-  Future<void> _showSessionInfo(BuildContext context) async {
-    await showModalBottomSheet<void>(
-      context: context,
-      builder: (context) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Session details',
-                  style: Theme.of(context)
-                      .textTheme
-                      .titleLarge
-                      ?.copyWith(fontWeight: FontWeight.w700),
-                ),
-                const SizedBox(height: 16),
-                _SessionInfoRow(
-                  label: 'Workspace',
-                  value: widget.workspace.name,
-                ),
-                _SessionInfoRow(
-                  label: 'Local session id',
-                  value: widget.session.id,
-                ),
-                if (widget.session.geminiSessionId != null)
-                  _SessionInfoRow(
-                    label: 'Gemini session id',
-                    value: widget.session.geminiSessionId!,
-                  ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
+  DateTime _latestActivityAt() {
+    if (_events.isNotEmpty) {
+      return _events.last.ts;
+    }
+    return widget.session.lastActivityAt;
+  }
+
+  Future<void> _showExport() async {
+    final api = ref.read(apiClientProvider);
+    if (api == null) {
+      return;
+    }
+
+    setState(() {
+      _exporting = true;
+    });
+
+    try {
+      final export = await api.exportSession(widget.session.id);
+      final jsonText = const JsonEncoder.withIndent(
+        '  ',
+      ).convert(export.toJson());
+      if (!mounted) {
+        return;
+      }
+      await showJsonExportSheet(
+        context: context,
+        title: 'Session export',
+        jsonText: jsonText,
+      );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.toString())));
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _exporting = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _refreshConversation() async {
+    await _fetchEvents(afterSeq: _lastSeq);
   }
 
   Future<void> _fetchEvents({required int afterSeq}) async {
@@ -451,6 +517,9 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
         _error = null;
         _mergeEvents(events);
       });
+      if (events.any((event) => _eventAffectsSessionSummary(event.type))) {
+        ref.invalidate(sessionsProvider(widget.workspace.id));
+      }
     } catch (error) {
       if (!mounted) {
         return;
@@ -470,6 +539,9 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
     setState(() {
       _mergeEvents([envelope.event]);
     });
+    if (_eventAffectsSessionSummary(envelope.event.type)) {
+      ref.invalidate(sessionsProvider(widget.workspace.id));
+    }
   }
 
   void _mergeEvents(List<SessionEvent> incoming) {
@@ -524,7 +596,8 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
       switch (event.type) {
         case 'message.delta':
           fullText =
-              event.payload['fullText'] as String? ?? '$fullText${event.payload['text'] ?? ''}';
+              event.payload['fullText'] as String? ??
+              '$fullText${event.payload['text'] ?? ''}';
         case 'message.completed':
           fullText = event.payload['text'] as String? ?? fullText;
           completed = true;
@@ -570,9 +643,9 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
       await _fetchEvents(afterSeq: _lastSeq);
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(error.toString())),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.toString())));
       }
     } finally {
       if (mounted) {
@@ -591,34 +664,24 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
 
     try {
       await api.cancelSession(widget.session.id);
+      await _fetchEvents(afterSeq: _lastSeq);
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(error.toString())),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.toString())));
       }
     }
   }
 }
 
-enum _TranscriptEntryKind {
-  user,
-  assistant,
-  tool,
-  system,
-}
+enum _SessionDetailAction { downloadCurrent, refresh }
 
-enum _ToolState {
-  running,
-  completed,
-  failed,
-}
+enum _TranscriptEntryKind { user, assistant, tool, system }
 
-enum _SystemTone {
-  info,
-  warning,
-  error,
-}
+enum _ToolState { running, completed, failed }
+
+enum _SystemTone { info, warning, error }
 
 class _TranscriptEntry {
   const _TranscriptEntry._({
@@ -633,10 +696,7 @@ class _TranscriptEntry {
     this.tone,
   });
 
-  factory _TranscriptEntry.user({
-    required String text,
-    required DateTime ts,
-  }) {
+  factory _TranscriptEntry.user({required String text, required DateTime ts}) {
     return _TranscriptEntry._(
       kind: _TranscriptEntryKind.user,
       title: 'You',
@@ -646,13 +706,14 @@ class _TranscriptEntry {
   }
 
   factory _TranscriptEntry.assistant({
+    required String title,
     required String text,
     required DateTime ts,
     bool isLive = false,
   }) {
     return _TranscriptEntry._(
       kind: _TranscriptEntryKind.assistant,
-      title: 'Gemini',
+      title: title,
       text: text,
       ts: ts,
       isLive: isLive,
@@ -753,16 +814,23 @@ class _MessageBubble extends StatelessWidget {
     required this.alignment,
     required this.backgroundColor,
     required this.foregroundColor,
+    required this.renderMarkdown,
   });
 
   final _TranscriptEntry entry;
   final Alignment alignment;
   final Color backgroundColor;
   final Color foregroundColor;
+  final bool renderMarkdown;
 
   @override
   Widget build(BuildContext context) {
-    final maxWidth = MediaQuery.sizeOf(context).width * 0.82;
+    final maxWidth = MediaQuery.sizeOf(context).width * 0.86;
+    final textStyle = TextStyle(
+      color: foregroundColor,
+      height: 1.36,
+      fontSize: 13,
+    );
     return Align(
       alignment: alignment,
       child: ConstrainedBox(
@@ -770,22 +838,22 @@ class _MessageBubble extends StatelessWidget {
         child: DecoratedBox(
           decoration: BoxDecoration(
             color: backgroundColor,
-            borderRadius: BorderRadius.circular(24),
+            borderRadius: BorderRadius.circular(18),
             boxShadow: entry.kind == _TranscriptEntryKind.assistant
                 ? const [
                     BoxShadow(
                       color: Color(0x12000000),
-                      blurRadius: 18,
-                      offset: Offset(0, 6),
+                      blurRadius: 14,
+                      offset: Offset(0, 4),
                     ),
                   ]
                 : null,
           ),
           child: Padding(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.fromLTRB(11, 10, 11, 10),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
-              spacing: 10,
+              spacing: 7,
               children: [
                 Row(
                   children: [
@@ -793,25 +861,25 @@ class _MessageBubble extends StatelessWidget {
                       entry.title,
                       style: TextStyle(
                         color: foregroundColor.withValues(alpha: 0.78),
-                        fontSize: 12,
+                        fontSize: 11,
                         fontWeight: FontWeight.w700,
                         letterSpacing: 0.3,
                       ),
                     ),
-                    const SizedBox(width: 8),
+                    const SizedBox(width: 6),
                     Text(
                       _formatTime(entry.ts),
                       style: TextStyle(
                         color: foregroundColor.withValues(alpha: 0.62),
-                        fontSize: 12,
+                        fontSize: 11,
                       ),
                     ),
                     if (entry.isLive) ...[
                       const Spacer(),
                       Container(
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 4,
+                          horizontal: 8,
+                          vertical: 3,
                         ),
                         decoration: BoxDecoration(
                           color: foregroundColor.withValues(alpha: 0.14),
@@ -821,7 +889,7 @@ class _MessageBubble extends StatelessWidget {
                           'Live',
                           style: TextStyle(
                             color: foregroundColor,
-                            fontSize: 11,
+                            fontSize: 10,
                             fontWeight: FontWeight.w700,
                           ),
                         ),
@@ -829,14 +897,18 @@ class _MessageBubble extends StatelessWidget {
                     ],
                   ],
                 ),
-                SelectableText(
-                  entry.text ?? '',
-                  style: TextStyle(
-                    color: foregroundColor,
-                    height: 1.42,
-                    fontSize: 15,
-                  ),
-                ),
+                if (renderMarkdown)
+                  MarkdownBody(
+                    data: entry.text ?? '',
+                    softLineBreak: true,
+                    styleSheet: _markdownStyleSheet(
+                      context,
+                      textColor: foregroundColor,
+                      codeBackground: foregroundColor.withValues(alpha: 0.08),
+                    ),
+                  )
+                else
+                  SelectableText(entry.text ?? '', style: textStyle),
               ],
             ),
           ),
@@ -847,10 +919,7 @@ class _MessageBubble extends StatelessWidget {
 }
 
 class _ToolCallCard extends StatefulWidget {
-  const _ToolCallCard({
-    super.key,
-    required this.entry,
-  });
+  const _ToolCallCard({super.key, required this.entry});
 
   final _TranscriptEntry entry;
 
@@ -870,9 +939,6 @@ class _ToolCallCardState extends State<_ToolCallCard> {
       _ToolState.completed => ('Completed', const Color(0xFF29785A)),
       _ToolState.failed => ('Failed', const Color(0xFFB33D2E)),
     };
-    final summary = state == _ToolState.running
-        ? 'Running ${entry.title}'
-        : entry.responseSummary ?? entry.requestSummary ?? '${entry.title} finished';
     final hasDetails =
         entry.requestSummary != null || entry.responseSummary != null;
 
@@ -880,89 +946,67 @@ class _ToolCallCardState extends State<_ToolCallCard> {
       alignment: Alignment.centerLeft,
       child: ConstrainedBox(
         constraints: BoxConstraints(
-          maxWidth: MediaQuery.sizeOf(context).width * 0.9,
+          maxWidth: MediaQuery.sizeOf(context).width * 0.94,
         ),
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: const Color(0xFFFFFBF7),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: const Color(0xFFE3D4C5)),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              spacing: 8,
-              children: [
-                Row(
-                  children: [
-                    const Icon(Icons.build_circle_outlined, size: 17),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        entry.title,
-                        style: Theme.of(context)
-                            .textTheme
-                            .titleSmall
-                            ?.copyWith(fontWeight: FontWeight.w700),
+        child: SectionCard(
+          padding: const EdgeInsets.fromLTRB(10, 9, 10, 9),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            spacing: 6,
+            children: [
+              Row(
+                children: [
+                  Icon(_toolIcon(entry.title), size: 16, color: status.$2),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      entry.title,
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
                       ),
                     ),
-                    StatusPill(
-                      label: status.$1,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    status.$1,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: status.$2,
+                      fontWeight: FontWeight.w700,
                     ),
-                  ],
-                ),
-                Text(
-                  _clip(summary, 110),
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: const Color(0xFF5C5147),
+                  ),
+                  const SizedBox(width: 8),
+                  if (hasDetails)
+                    TextButton(
+                      onPressed: () {
+                        setState(() {
+                          _expanded = !_expanded;
+                        });
+                      },
+                      style: TextButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                        minimumSize: Size.zero,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 4,
+                        ),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
-                ),
-                Row(
-                  children: [
-                    Text(
-                      _formatTime(entry.ts),
-                      style: Theme.of(context).textTheme.bodySmall,
+                      child: Text(_expanded ? 'Hide Details' : 'Show Details'),
                     ),
-                    if (hasDetails) ...[
-                      const Spacer(),
-                      TextButton.icon(
-                        onPressed: () {
-                          setState(() {
-                            _expanded = !_expanded;
-                          });
-                        },
-                        style: TextButton.styleFrom(
-                          visualDensity: VisualDensity.compact,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 0,
-                          ),
-                        ),
-                        icon: Icon(
-                          _expanded
-                              ? Icons.expand_less_rounded
-                              : Icons.expand_more_rounded,
-                          size: 18,
-                        ),
-                        label: Text(_expanded ? 'Hide details' : 'Show details'),
-                      ),
-                    ],
-                  ],
+                ],
+              ),
+              Text(
+                _formatTime(entry.ts),
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              if (_expanded && entry.requestSummary != null)
+                _ToolDetailBlock(label: 'Input', body: entry.requestSummary!),
+              if (_expanded && entry.responseSummary != null)
+                _ToolDetailBlock(
+                  label: state == _ToolState.failed ? 'Error' : 'Result',
+                  body: entry.responseSummary!,
                 ),
-                if (_expanded && entry.requestSummary != null)
-                  _ToolDetailBlock(
-                    label: 'Input',
-                    body: entry.requestSummary!,
-                  ),
-                if (_expanded && entry.responseSummary != null)
-                  _ToolDetailBlock(
-                    label: state == _ToolState.failed ? 'Error' : 'Result',
-                    body: entry.responseSummary!,
-                  ),
-              ],
-            ),
+            ],
           ),
         ),
       ),
@@ -971,10 +1015,7 @@ class _ToolCallCardState extends State<_ToolCallCard> {
 }
 
 class _ToolDetailBlock extends StatelessWidget {
-  const _ToolDetailBlock({
-    required this.label,
-    required this.body,
-  });
+  const _ToolDetailBlock({required this.label, required this.body});
 
   final String label;
   final String body;
@@ -983,24 +1024,24 @@ class _ToolDetailBlock extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(9),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        color: const Color(0xFFFBF7F1),
+        borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        spacing: 6,
+        spacing: 4,
         children: [
           Text(
             label,
-            style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
+            style: Theme.of(
+              context,
+            ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700),
           ),
           SelectableText(
             body,
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(height: 1.35),
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(height: 1.3),
           ),
         ],
       ),
@@ -1008,10 +1049,61 @@ class _ToolDetailBlock extends StatelessWidget {
   }
 }
 
+MarkdownStyleSheet _markdownStyleSheet(
+  BuildContext context, {
+  required Color textColor,
+  required Color codeBackground,
+}) {
+  final baseTextStyle = Theme.of(context).textTheme.bodyMedium?.copyWith(
+    color: textColor,
+    height: 1.36,
+    fontSize: 13,
+  );
+  final codeStyle = Theme.of(context).textTheme.bodySmall?.copyWith(
+    color: textColor,
+    fontFamily: 'monospace',
+    height: 1.3,
+  );
+
+  return MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
+    p: baseTextStyle,
+    h1: baseTextStyle?.copyWith(fontWeight: FontWeight.w700, fontSize: 18),
+    h2: baseTextStyle?.copyWith(fontWeight: FontWeight.w700, fontSize: 16),
+    h3: baseTextStyle?.copyWith(fontWeight: FontWeight.w700, fontSize: 14),
+    listBullet: baseTextStyle,
+    blockquote: baseTextStyle,
+    strong: baseTextStyle?.copyWith(fontWeight: FontWeight.w700),
+    em: baseTextStyle?.copyWith(fontStyle: FontStyle.italic),
+    code: codeStyle,
+    codeblockDecoration: BoxDecoration(
+      color: codeBackground,
+      borderRadius: BorderRadius.circular(10),
+    ),
+    codeblockPadding: const EdgeInsets.all(10),
+    a: baseTextStyle?.copyWith(
+      color: textColor,
+      decoration: TextDecoration.underline,
+      fontWeight: FontWeight.w600,
+    ),
+  );
+}
+
+IconData _toolIcon(String toolName) {
+  final normalized = toolName.toLowerCase();
+  if (normalized.contains('web')) {
+    return Icons.public_rounded;
+  }
+  if (normalized.contains('bash') || normalized.contains('command')) {
+    return Icons.terminal_rounded;
+  }
+  if (normalized.contains('mcp')) {
+    return Icons.hub_outlined;
+  }
+  return Icons.build_circle_outlined;
+}
+
 class _SystemEventCard extends StatelessWidget {
-  const _SystemEventCard({
-    required this.entry,
-  });
+  const _SystemEventCard({required this.entry});
 
   final _TranscriptEntry entry;
 
@@ -1026,24 +1118,24 @@ class _SystemEventCard extends StatelessWidget {
     return Center(
       child: ConstrainedBox(
         constraints: BoxConstraints(
-          maxWidth: MediaQuery.sizeOf(context).width * 0.88,
+          maxWidth: MediaQuery.sizeOf(context).width * 0.92,
         ),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           decoration: BoxDecoration(
             color: tone.withValues(alpha: 0.08),
-            borderRadius: BorderRadius.circular(20),
+            borderRadius: BorderRadius.circular(16),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.center,
-            spacing: 6,
+            spacing: 4,
             children: [
               Text(
                 entry.title,
                 style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                      color: tone,
-                      fontWeight: FontWeight.w700,
-                    ),
+                  color: tone,
+                  fontWeight: FontWeight.w700,
+                ),
                 textAlign: TextAlign.center,
               ),
               if ((entry.text ?? '').isNotEmpty)
@@ -1051,9 +1143,9 @@ class _SystemEventCard extends StatelessWidget {
                   entry.text!,
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: const Color(0xFF544A40),
-                        height: 1.35,
-                      ),
+                    color: const Color(0xFF544A40),
+                    height: 1.3,
+                  ),
                 ),
               Text(
                 _formatTime(entry.ts),
@@ -1067,43 +1159,15 @@ class _SystemEventCard extends StatelessWidget {
   }
 }
 
-class _SessionInfoRow extends StatelessWidget {
-  const _SessionInfoRow({
-    required this.label,
-    required this.value,
-  });
+String _toolKey(String? runId, String toolName) =>
+    '${runId ?? 'none'}::$toolName';
 
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label,
-            style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
-          ),
-          const SizedBox(height: 4),
-          SelectableText(value),
-        ],
-      ),
-    );
-  }
-}
-
-String _toolKey(String? runId, String toolName) => '${runId ?? 'none'}::$toolName';
-
-String _shortId(String value) {
-  if (value.length <= 12) {
-    return value;
-  }
-  return '${value.substring(0, 8)}...${value.substring(value.length - 4)}';
+bool _eventAffectsSessionSummary(String type) {
+  return type == 'message.completed' ||
+      type == 'run.started' ||
+      type == 'run.completed' ||
+      type == 'run.failed' ||
+      type == 'run.cancelled';
 }
 
 String? _prettyToolResponse(Map<String, dynamic> payload) {
@@ -1197,8 +1261,11 @@ String _inlineSummary(Object? value) {
   }
 
   if (normalized is Map) {
-    final interesting = normalized.entries.take(2).map(
-          (entry) => '${_humanize(entry.key)} ${_clip(_inlineSummary(entry.value), 42)}',
+    final interesting = normalized.entries
+        .take(2)
+        .map(
+          (entry) =>
+              '${_humanize(entry.key)} ${_clip(_inlineSummary(entry.value), 42)}',
         );
     return interesting.join(', ');
   }

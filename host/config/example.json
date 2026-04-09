@@ -7,8 +7,14 @@
   "workspaces": [
     {
       "id": "workspace-1",
-      "name": "Sample Workspace",
-      "rootPath": "/absolute/path/to/your/project"
+      "name": "Gemini Workspace",
+      "rootPath": "/absolute/path/to/your/gemini-project"
+    },
+    {
+      "id": "workspace-2",
+      "name": "Codex Workspace",
+      "rootPath": "/absolute/path/to/your/codex-project",
+      "provider": "codex"
     }
   ]
 }

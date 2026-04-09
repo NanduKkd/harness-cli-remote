@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-remote-bridge.js\"",
+            "statusMessage": "Forwarding Codex session telemetry"
+          }
+        ]
+      }
+    ]
+  }
+}

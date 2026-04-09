@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:web_socket_channel/io.dart';
 
 import '../models.dart';
+import 'run_notification_service.dart';
 
 class RealtimeService {
   final StreamController<RealtimeEnvelope> _messages =
@@ -14,6 +15,7 @@ class RealtimeService {
 
   IOWebSocketChannel? _channel;
   Timer? _retryTimer;
+  final RunNotificationService _notificationService = RunNotificationService();
   AuthSession? _auth;
   ConnectionStatus _status = ConnectionStatus.disconnected;
   int _retryAttempt = 0;
@@ -38,6 +40,7 @@ class RealtimeService {
       return;
     }
 
+    unawaited(_notificationService.ensureInitialized());
     _connect();
   }
 
@@ -67,7 +70,9 @@ class RealtimeService {
           return;
         }
         if (parsed['type'] == 'session.event') {
-          _messages.add(RealtimeEnvelope.fromJson(parsed));
+          final envelope = RealtimeEnvelope.fromJson(parsed);
+          _messages.add(envelope);
+          unawaited(_notificationService.handleEnvelope(envelope));
         }
       },
       onDone: _handleDisconnect,

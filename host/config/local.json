@@ -9,6 +9,11 @@
       "id": "gemini-remote",
       "name": "Gemini Remote Workspace",
       "rootPath": "/Users/nandakrishnan/applca/gemini-remote"
+    },
+    {
+      "id": "test-workspace",
+      "name": "Test Workspace",
+      "rootPath": "/Users/nandakrishnan/applca/DrySpot-Damsure-Calc-App"
     }
   ]
 }

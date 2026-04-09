@@ -17,6 +17,7 @@ const configSchema = z.object({
         id: z.string().min(1),
         name: z.string().min(1),
         rootPath: z.string().min(1),
+        provider: z.enum(['gemini', 'codex']).default('gemini'),
       }),
     )
     .min(1),
