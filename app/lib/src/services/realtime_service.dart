@@ -72,7 +72,6 @@ class RealtimeService {
         if (parsed['type'] == 'session.event') {
           final envelope = RealtimeEnvelope.fromJson(parsed);
           _messages.add(envelope);
-          unawaited(_notificationService.handleEnvelope(envelope));
         }
       },
       onDone: _handleDisconnect,

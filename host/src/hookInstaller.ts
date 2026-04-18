@@ -1,3 +1,4 @@
+import { installGeminiArtifactMcp } from './artifactMcp.js';
 import type { WorkspaceConfig, WorkspaceRecord } from './types.js';
 import { getCodexHookStatus, installCodexHooks } from './codexHookInstaller.js';
 import { getGeminiHookStatus, installGeminiHooks } from './geminiHookInstaller.js';
@@ -9,6 +10,7 @@ export function installHooks(workspace: WorkspaceConfig): void {
   }
 
   installGeminiHooks(workspace.rootPath);
+  installGeminiArtifactMcp(workspace.rootPath);
 }
 
 export function getHookStatus(

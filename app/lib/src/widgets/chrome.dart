@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models.dart';
+import '../theme.dart';
 
 class AtmosphereScaffold extends StatelessWidget {
   const AtmosphereScaffold({
@@ -25,7 +26,7 @@ class AtmosphereScaffold extends StatelessWidget {
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [Color(0xFFFFF4E8), Color(0xFFF5E7D7), Color(0xFFEFE4DE)],
+          colors: AppPalette.atmosphereGradient,
         ),
       ),
       child: Scaffold(
@@ -118,29 +119,29 @@ Color statusColor(String status) {
   switch (status) {
     case 'running':
     case 'connected':
-      return const Color(0xFF29785A);
+      return AppPalette.success;
     case 'completed':
     case 'installed':
     case 'idle':
-      return const Color(0xFF2F5BA8);
+      return AppPalette.info;
     case 'cancelled':
-      return const Color(0xFF9A5F16);
+      return AppPalette.warning;
     case 'failed':
     case 'missing':
-      return const Color(0xFFB33D2E);
+      return AppPalette.error;
     default:
-      return const Color(0xFF5F6670);
+      return AppPalette.neutral;
   }
 }
 
 Color connectionColor(ConnectionStatus status) {
   switch (status) {
     case ConnectionStatus.connected:
-      return const Color(0xFF29785A);
+      return AppPalette.success;
     case ConnectionStatus.connecting:
-      return const Color(0xFF9A5F16);
+      return AppPalette.warning;
     case ConnectionStatus.disconnected:
-      return const Color(0xFF5F6670);
+      return AppPalette.neutral;
   }
 }
 
@@ -158,9 +159,9 @@ String connectionLabel(ConnectionStatus status) {
 Color providerColor(String provider) {
   switch (provider) {
     case 'codex':
-      return const Color(0xFF7B4D2A);
+      return AppPalette.providerCodex;
     case 'gemini':
     default:
-      return const Color(0xFF2F5BA8);
+      return AppPalette.providerGemini;
   }
 }

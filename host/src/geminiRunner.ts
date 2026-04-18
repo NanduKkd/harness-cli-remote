@@ -3,6 +3,8 @@ import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 
+import type { FastifyBaseLogger } from 'fastify';
+
 import type { RunRecord, SessionEventRecord } from './types.js';
 import type { RunnerControls, RuntimeRun, SpawnRunArgs, WorkspaceRunner } from './runners.js';
 import { nowIso, summarizeJson } from './util.js';
@@ -11,28 +13,48 @@ type GeminiRuntimeState = {
   fallbackMessageText: string | null;
 };
 
+type GeminiTranscript = {
+  sessionId?: string;
+  messages?: Array<{
+    timestamp?: string;
+    type?: string;
+    content?: unknown;
+  }>;
+};
+
+type GeminiTranscriptSnapshot = {
+  transcriptPath: string;
+  transcript: GeminiTranscript;
+  sessionId: string | null;
+};
+
 export class GeminiRunner implements WorkspaceRunner {
   readonly provider = 'gemini' as const;
 
   spawnRun(args: SpawnRunArgs) {
-    const { session, workspace, prompt, resume, daemonUrl, hookToken, runId } = args;
+    const { session, workspace, model, prompt, resume, daemonUrl, hookToken, runId } = args;
+    const useProcessGroupSignals = process.platform !== 'win32';
     const child = spawn(
       process.env.GEMINI_BIN ?? 'gemini',
-      buildGeminiArgs(session, prompt, resume),
+      buildGeminiArgs(session, prompt, resume, model),
       {
         cwd: workspace.rootPath,
+        detached: useProcessGroupSignals,
         env: {
           ...process.env,
           REMOTE_DAEMON_URL: daemonUrl,
           REMOTE_HOOK_TOKEN: hookToken,
           REMOTE_SESSION_ID: session.id,
           REMOTE_RUN_ID: runId,
+          REMOTE_WORKSPACE_ROOT: workspace.rootPath,
         },
       },
     );
 
     return {
       child,
+      sendSignal: (signal: NodeJS.Signals) =>
+        sendGeminiSignal(child, signal, useProcessGroupSignals),
       state: {
         fallbackMessageText: null,
       } satisfies GeminiRuntimeState,
@@ -195,17 +217,55 @@ export class GeminiRunner implements WorkspaceRunner {
   }
 }
 
-function buildGeminiArgs(
+export function buildGeminiArgs(
   session: { providerSessionId: string | null; geminiSessionId: string | null },
   prompt: string,
   resume: boolean,
+  model: string | null,
 ): string[] {
   const args = ['--yolo'];
+  if (model) {
+    args.push('--model', model);
+  }
   if (resume) {
     args.push('--resume', session.providerSessionId ?? session.geminiSessionId ?? '');
   }
   args.push('-p', prompt);
   return args;
+}
+
+function sendGeminiSignal(
+  child: ReturnType<typeof spawn>,
+  signal: NodeJS.Signals,
+  useProcessGroupSignals: boolean,
+): void {
+  if (useProcessGroupSignals && child.pid != null) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch (error) {
+      if (!isMissingProcessError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  try {
+    child.kill(signal);
+  } catch (error) {
+    if (!isMissingProcessError(error)) {
+      throw error;
+    }
+  }
+}
+
+function isMissingProcessError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as NodeJS.ErrnoException).code === 'ESRCH'
+  );
 }
 
 function reconcileTranscript(runId: string, controls: RunnerControls): void {
@@ -219,69 +279,106 @@ function reconcileTranscript(runId: string, controls: RunnerControls): void {
     return;
   }
 
+  const snapshot = loadGeminiTranscript(session, controls.logger);
+  if (!snapshot) {
+    return;
+  }
+
+  controls.updateSessionMetadata(session.id, {
+    providerSessionId: snapshot.sessionId ?? session.providerSessionId,
+    geminiSessionId: snapshot.sessionId ?? session.geminiSessionId,
+    transcriptPath: snapshot.transcriptPath,
+  });
+
+  const latestMessage = [...(snapshot.transcript.messages ?? [])]
+    .reverse()
+    .find(
+      (message) =>
+        message.type === 'gemini' &&
+        typeof message.content === 'string' &&
+        (!message.timestamp || message.timestamp >= run.startedAt),
+    );
+
+  if (!latestMessage || typeof latestMessage.content !== 'string') {
+    return;
+  }
+
+  const existing = controls.getLatestCompletedMessage(run.id);
+  if (
+    normalizeMessageText(existing?.payload.text as string | undefined) ===
+    normalizeMessageText(latestMessage.content)
+  ) {
+    return;
+  }
+
+  controls.emit(session.id, run.id, {
+    type: 'message.completed',
+    payload: {
+      text: latestMessage.content,
+      source: 'transcript-reconcile',
+    },
+    ts: latestMessage.timestamp ?? nowIso(),
+  });
+}
+
+export function recoverGeminiSessionMetadata(
+  session: {
+    providerSessionId: string | null;
+    geminiSessionId: string | null;
+    transcriptPath: string | null;
+  },
+  logger: Pick<FastifyBaseLogger, 'warn'>,
+): {
+  providerSessionId: string | null;
+  geminiSessionId: string | null;
+  transcriptPath: string | null;
+} | null {
+  const snapshot = loadGeminiTranscript(session, logger);
+  if (!snapshot) {
+    return null;
+  }
+
+  return {
+    providerSessionId:
+      snapshot.sessionId ?? session.providerSessionId ?? session.geminiSessionId,
+    geminiSessionId: snapshot.sessionId ?? session.geminiSessionId,
+    transcriptPath: snapshot.transcriptPath,
+  };
+}
+
+function loadGeminiTranscript(
+  session: {
+    providerSessionId: string | null;
+    geminiSessionId: string | null;
+    transcriptPath: string | null;
+  },
+  logger: Pick<FastifyBaseLogger, 'warn'>,
+): GeminiTranscriptSnapshot | null {
   const transcriptPath = resolveTranscriptPath({
     reportedPath: session.transcriptPath,
     existingPath: session.transcriptPath,
     sessionId: session.providerSessionId ?? session.geminiSessionId,
   });
   if (!transcriptPath) {
-    return;
+    return null;
   }
 
   try {
-    const transcript = JSON.parse(readFileSync(transcriptPath, 'utf8')) as {
-      sessionId?: string;
-      messages?: Array<{
-        timestamp?: string;
-        type?: string;
-        content?: unknown;
-      }>;
-    };
-
-    controls.updateSessionMetadata(session.id, {
-      providerSessionId: transcript.sessionId ?? session.providerSessionId,
-      geminiSessionId: transcript.sessionId ?? session.geminiSessionId,
+    const transcript = JSON.parse(readFileSync(transcriptPath, 'utf8')) as GeminiTranscript;
+    return {
       transcriptPath,
-    });
-
-    const latestMessage = [...(transcript.messages ?? [])]
-      .reverse()
-      .find(
-        (message) =>
-          message.type === 'gemini' &&
-          typeof message.content === 'string' &&
-          (!message.timestamp || message.timestamp >= run.startedAt),
-      );
-
-    if (!latestMessage || typeof latestMessage.content !== 'string') {
-      return;
-    }
-
-    const existing = controls.getLatestCompletedMessage(run.id);
-    if (
-      normalizeMessageText(existing?.payload.text as string | undefined) ===
-      normalizeMessageText(latestMessage.content)
-    ) {
-      return;
-    }
-
-    controls.emit(session.id, run.id, {
-      type: 'message.completed',
-      payload: {
-        text: latestMessage.content,
-        source: 'transcript-reconcile',
-      },
-      ts: latestMessage.timestamp ?? nowIso(),
-    });
+      transcript,
+      sessionId: stringOrNull(transcript.sessionId),
+    };
   } catch (error) {
-    controls.logger.warn(
+    logger.warn(
       {
         err: error,
-        runId,
         transcriptPath,
       },
-      'Failed to reconcile Gemini transcript',
+      'Failed to load Gemini transcript',
     );
+    return null;
   }
 }
 

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models.dart';
+import '../theme.dart';
 import 'chrome.dart';
 
 class RunDiagnosticsCard extends StatelessWidget {
@@ -107,7 +108,7 @@ class _MetricChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: const Color(0xFFFFF4E8),
+        color: AppPalette.surfaceHighlight,
         borderRadius: BorderRadius.circular(999),
       ),
       child: Text(
@@ -140,15 +141,17 @@ class _RunTile extends StatelessWidget {
           label: 'Cancelled',
           body: 'This run was cancelled by the user from the mobile app.',
         ),
+      if (run.model != null)
+        _TailBlock(label: 'Model', body: modelDisplayLabel(run.model)),
       if (run.exitCode != null)
         _TailBlock(label: 'Exit code', body: '${run.exitCode}'),
     ];
 
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppPalette.surface,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFE4D5C6)),
+        border: Border.all(color: AppPalette.outline),
       ),
       child: Theme(
         data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
@@ -198,6 +201,7 @@ class _RunTile extends StatelessWidget {
         'Ended ${_formatTime(run.endedAt!)}'
       else
         'In progress',
+      if (run.model != null) 'Model ${modelDisplayLabel(run.model)}',
       if (run.exitCode != null) 'Exit ${run.exitCode}',
       if (run.cancelledByUser) 'Cancelled by user',
     ];
@@ -226,7 +230,7 @@ class _TailBlock extends StatelessWidget {
       margin: const EdgeInsets.only(top: 8),
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: const Color(0xFFFFFBF7),
+        color: AppPalette.surfaceSoft,
         borderRadius: BorderRadius.circular(12),
       ),
       child: Column(

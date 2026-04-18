@@ -1,0 +1,57 @@
+<svg width="1600" height="900" viewBox="0 0 1600 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="tileGradientSignal" x1="160" y1="160" x2="640" y2="700" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#DF8247"/>
+      <stop offset="1" stop-color="#9E4D24"/>
+    </linearGradient>
+    <linearGradient id="signalArc" x1="450" y1="180" x2="620" y2="330" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F7E6D2"/>
+      <stop offset="1" stop-color="#F3B35A"/>
+    </linearGradient>
+    <filter id="shadowSignal" x="100" y="120" width="620" height="640" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="18" stdDeviation="24" flood-color="#6D3118" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+  <rect width="1600" height="900" fill="#F7F1E8"/>
+  <text x="100" y="96" fill="#9E4D24" font-size="28" font-family="Avenir Next, Helvetica, Arial, sans-serif" font-weight="700" letter-spacing="4">CONCEPT 1</text>
+  <text x="100" y="158" fill="#2E2B27" font-size="64" font-family="Avenir Next, Helvetica, Arial, sans-serif" font-weight="800">Signal Tile</text>
+  <text x="100" y="210" fill="#6A615A" font-size="28" font-family="Avenir Next, Helvetica, Arial, sans-serif">Best fit if you want the clearest launcher icon at a glance.</text>
+
+  <g filter="url(#shadowSignal)">
+    <rect x="120" y="210" width="520" height="520" rx="148" fill="url(#tileGradientSignal)"/>
+  </g>
+  <rect x="212" y="332" width="336" height="248" rx="42" fill="#F8F1E8" opacity="0.96"/>
+  <circle cx="252" cy="370" r="10" fill="#D7773E"/>
+  <circle cx="286" cy="370" r="10" fill="#EDC269"/>
+  <circle cx="320" cy="370" r="10" fill="#D9D4CC"/>
+  <path d="M224 404H536" stroke="#E1D7CB" stroke-width="4"/>
+  <text x="252" y="492" fill="#2E2B27" font-size="146" font-family="Menlo, Monaco, Consolas, monospace" font-weight="700">&gt;_</text>
+  <path d="M428 266C480 276 524 320 532 372" stroke="url(#signalArc)" stroke-width="26" stroke-linecap="round"/>
+  <path d="M470 234C548 248 612 312 626 390" stroke="url(#signalArc)" stroke-width="26" stroke-linecap="round" opacity="0.76"/>
+  <circle cx="474" cy="620" r="18" fill="#F7E6D2"/>
+  <circle cx="526" cy="620" r="12" fill="#F1BC6A"/>
+
+  <g transform="translate(770 254)">
+    <rect x="0" y="0" width="144" height="144" rx="40" fill="url(#tileGradientSignal)"/>
+    <rect x="26" y="42" width="92" height="68" rx="14" fill="#F8F1E8"/>
+    <circle cx="38" cy="54" r="4" fill="#D7773E"/>
+    <circle cx="52" cy="54" r="4" fill="#EDC269"/>
+    <path d="M28 64H116" stroke="#E1D7CB" stroke-width="2"/>
+    <text x="36" y="91" fill="#2E2B27" font-size="40" font-family="Menlo, Monaco, Consolas, monospace" font-weight="700">&gt;_</text>
+    <path d="M82 20C100 24 116 40 120 58" stroke="#F7E6D2" stroke-width="8" stroke-linecap="round"/>
+    <path d="M96 8C124 14 146 36 152 64" stroke="#F1BC6A" stroke-width="8" stroke-linecap="round" opacity="0.85"/>
+  </g>
+
+  <text x="950" y="318" fill="#2E2B27" font-size="108" font-family="Avenir Next, Helvetica, Arial, sans-serif" font-weight="800">CLI Remote</text>
+  <text x="952" y="378" fill="#9E4D24" font-size="34" font-family="Avenir Next, Helvetica, Arial, sans-serif" font-weight="700" letter-spacing="2">REMOTE SESSIONS FOR GEMINI AND CODEX</text>
+  <text x="770" y="478" fill="#4C4641" font-size="30" font-family="Avenir Next, Helvetica, Arial, sans-serif">
+    <tspan x="770" dy="0">The prompt window makes the app category obvious,</tspan>
+    <tspan x="770" dy="44">while the signal arcs add the "remote control" idea.</tspan>
+  </text>
+  <text x="770" y="620" fill="#2E2B27" font-size="26" font-family="Avenir Next, Helvetica, Arial, sans-serif" font-weight="700">Why it works</text>
+  <text x="770" y="664" fill="#6A615A" font-size="28" font-family="Avenir Next, Helvetica, Arial, sans-serif">
+    <tspan x="770" dy="0">High contrast at small sizes.</tspan>
+    <tspan x="770" dy="42">Keeps the current warm clay palette.</tspan>
+    <tspan x="770" dy="42">Can scale into notification and splash assets cleanly.</tspan>
+  </text>
+</svg>

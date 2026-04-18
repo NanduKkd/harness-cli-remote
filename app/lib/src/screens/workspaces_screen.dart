@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models.dart';
 import '../state/app_state.dart';
+import '../theme.dart';
 import '../widgets/chrome.dart';
 import 'sessions_screen.dart';
 
@@ -23,7 +24,7 @@ class _WorkspacesScreenState extends ConsumerState<WorkspacesScreen> {
     final realtime = ref.watch(realtimeServiceProvider);
 
     return AtmosphereScaffold(
-      title: 'CLI Remote',
+      title: 'Code Remotely',
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _openCreateWorkspaceSheet,
         icon: const Icon(Icons.create_new_folder_outlined),
@@ -69,6 +70,34 @@ class _WorkspacesScreenState extends ConsumerState<WorkspacesScreen> {
               }
               return workspace.provider == _providerFilter;
             }).toList();
+            final workspaceEntries =
+                filtered.map((workspace) {
+                  final sessions = ref.watch(sessionsProvider(workspace.id));
+                  return _WorkspaceListEntry(
+                    workspace: workspace,
+                    sessions: sessions,
+                    activeSessionCount: sessions.maybeWhen(
+                      data: _countActiveSessions,
+                      orElse: () => 0,
+                    ),
+                    lastActivityAt: sessions.maybeWhen(
+                      data: _latestSessionActivity,
+                      orElse: () => null,
+                    ),
+                  );
+                }).toList()..sort((left, right) {
+                  final leftTimestamp =
+                      left.lastActivityAt?.millisecondsSinceEpoch ?? -1;
+                  final rightTimestamp =
+                      right.lastActivityAt?.millisecondsSinceEpoch ?? -1;
+                  final byActivity = rightTimestamp.compareTo(leftTimestamp);
+                  if (byActivity != 0) {
+                    return byActivity;
+                  }
+                  return left.workspace.name.toLowerCase().compareTo(
+                    right.workspace.name.toLowerCase(),
+                  );
+                });
 
             return ListView(
               padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
@@ -149,14 +178,15 @@ class _WorkspacesScreenState extends ConsumerState<WorkspacesScreen> {
                   ),
                 ),
                 const SizedBox(height: 8),
-                if (filtered.isEmpty)
+                if (workspaceEntries.isEmpty)
                   const EmptyStateCard(
                     title: 'Nothing here',
                     body:
                         'Add or repair a workspace for this provider to continue.',
                   )
                 else
-                  ...filtered.map((workspace) {
+                  ...workspaceEntries.map((entry) {
+                    final workspace = entry.workspace;
                     final isRepairing = _repairingWorkspaceIds.contains(
                       workspace.id,
                     );
@@ -202,6 +232,12 @@ class _WorkspacesScreenState extends ConsumerState<WorkspacesScreen> {
                                           fontWeight: FontWeight.w700,
                                         ),
                                   ),
+                                  if (entry.activeSessionCount > 0) ...[
+                                    const SizedBox(width: 8),
+                                    _ActiveSessionCountPill(
+                                      count: entry.activeSessionCount,
+                                    ),
+                                  ],
                                   const SizedBox(width: 4),
                                   if (isRepairing)
                                     const SizedBox(
@@ -238,7 +274,10 @@ class _WorkspacesScreenState extends ConsumerState<WorkspacesScreen> {
                                 workspace.rootPath,
                                 style: Theme.of(context).textTheme.bodySmall,
                               ),
-                              _WorkspaceActivityLine(workspace: workspace),
+                              _WorkspaceActivityLine(
+                                workspace: workspace,
+                                sessions: entry.sessions,
+                              ),
                             ],
                           ),
                         ),
@@ -328,6 +367,20 @@ class _WorkspacesScreenState extends ConsumerState<WorkspacesScreen> {
 
 enum _WorkspaceAction { repairHooks }
 
+class _WorkspaceListEntry {
+  const _WorkspaceListEntry({
+    required this.workspace,
+    required this.sessions,
+    required this.activeSessionCount,
+    required this.lastActivityAt,
+  });
+
+  final Workspace workspace;
+  final AsyncValue<List<RemoteSession>> sessions;
+  final int activeSessionCount;
+  final DateTime? lastActivityAt;
+}
+
 String _formatTime(DateTime value) {
   final hour = value.hour % 12 == 0 ? 12 : value.hour % 12;
   final minute = value.minute.toString().padLeft(2, '0');
@@ -335,14 +388,56 @@ String _formatTime(DateTime value) {
   return '${value.month}/${value.day} $hour:$minute $suffix';
 }
 
-class _WorkspaceActivityLine extends ConsumerWidget {
-  const _WorkspaceActivityLine({required this.workspace});
+int _countActiveSessions(List<RemoteSession> sessions) {
+  return sessions.where((session) => session.status == 'running').length;
+}
 
-  final Workspace workspace;
+DateTime? _latestSessionActivity(List<RemoteSession> sessions) {
+  DateTime? latest;
+  for (final session in sessions) {
+    if (latest == null || session.lastActivityAt.isAfter(latest)) {
+      latest = session.lastActivityAt;
+    }
+  }
+  return latest;
+}
+
+class _ActiveSessionCountPill extends StatelessWidget {
+  const _ActiveSessionCountPill({required this.count});
+
+  final int count;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final sessions = ref.watch(sessionsProvider(workspace.id));
+  Widget build(BuildContext context) {
+    const tone = AppPalette.success;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: tone.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        '$count active',
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+          color: tone,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+}
+
+class _WorkspaceActivityLine extends StatelessWidget {
+  const _WorkspaceActivityLine({
+    required this.workspace,
+    required this.sessions,
+  });
+
+  final Workspace workspace;
+  final AsyncValue<List<RemoteSession>> sessions;
+
+  @override
+  Widget build(BuildContext context) {
     final style = Theme.of(context).textTheme.bodySmall;
 
     return sessions.when(
@@ -637,9 +732,9 @@ class _DirectoryPickerSheetState extends ConsumerState<_DirectoryPickerSheet> {
               Expanded(
                 child: DecoratedBox(
                   decoration: BoxDecoration(
-                    color: Colors.white,
+                    color: AppPalette.surface,
                     borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: const Color(0xFFE4D5C6)),
+                    border: Border.all(color: AppPalette.outline),
                   ),
                   child: _loading
                       ? const Center(child: CircularProgressIndicator())

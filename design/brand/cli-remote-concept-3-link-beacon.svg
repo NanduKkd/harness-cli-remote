@@ -1,0 +1,58 @@
+<svg width="1600" height="900" viewBox="0 0 1600 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="beaconTile" x1="148" y1="190" x2="626" y2="714" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F2D8BE"/>
+      <stop offset="1" stop-color="#D97A41"/>
+    </linearGradient>
+    <linearGradient id="beaconStroke" x1="256" y1="310" x2="506" y2="564" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2E2B27"/>
+      <stop offset="1" stop-color="#7A3E20"/>
+    </linearGradient>
+    <filter id="shadowBeacon" x="102" y="116" width="630" height="648" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="18" stdDeviation="24" flood-color="#7A3E20" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+  <rect width="1600" height="900" fill="#F7F1E8"/>
+  <text x="100" y="96" fill="#9E4D24" font-size="28" font-family="Avenir Next, Helvetica, Arial, sans-serif" font-weight="700" letter-spacing="4">CONCEPT 3</text>
+  <text x="100" y="158" fill="#2E2B27" font-size="64" font-family="Avenir Next, Helvetica, Arial, sans-serif" font-weight="800">Link Beacon</text>
+  <text x="100" y="210" fill="#6A615A" font-size="28" font-family="Avenir Next, Helvetica, Arial, sans-serif">The most technical option. It emphasizes a live bridge between phone and workspace.</text>
+
+  <g filter="url(#shadowBeacon)">
+    <rect x="120" y="210" width="520" height="520" rx="148" fill="url(#beaconTile)"/>
+  </g>
+  <path d="M254 582L378 332L504 582" stroke="url(#beaconStroke)" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="378" cy="332" r="54" fill="#2E2B27"/>
+  <circle cx="378" cy="332" r="22" fill="#F7F1E8"/>
+  <circle cx="276" cy="582" r="58" fill="#2E2B27"/>
+  <circle cx="480" cy="582" r="58" fill="#9E4D24"/>
+  <circle cx="276" cy="582" r="24" fill="#F7F1E8"/>
+  <circle cx="480" cy="582" r="24" fill="#F7F1E8"/>
+  <rect x="316" y="430" width="124" height="90" rx="26" fill="#F8F1E8" opacity="0.95"/>
+  <text x="336" y="490" fill="#2E2B27" font-size="52" font-family="Menlo, Monaco, Consolas, monospace" font-weight="700">&gt;_</text>
+  <path d="M220 286C270 248 326 226 378 226" stroke="#FFFFFF" stroke-width="6" stroke-linecap="round" opacity="0.26"/>
+  <path d="M536 286C486 248 430 226 378 226" stroke="#FFFFFF" stroke-width="6" stroke-linecap="round" opacity="0.18"/>
+
+  <g transform="translate(770 254)">
+    <rect x="0" y="0" width="144" height="144" rx="40" fill="url(#beaconTile)"/>
+    <path d="M34 110L72 34L110 110" stroke="#2E2B27" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="72" cy="34" r="16" fill="#2E2B27"/>
+    <circle cx="44" cy="110" r="18" fill="#2E2B27"/>
+    <circle cx="100" cy="110" r="18" fill="#9E4D24"/>
+    <circle cx="72" cy="34" r="6" fill="#F7F1E8"/>
+    <circle cx="44" cy="110" r="7" fill="#F7F1E8"/>
+    <circle cx="100" cy="110" r="7" fill="#F7F1E8"/>
+  </g>
+
+  <text x="952" y="314" fill="#2E2B27" font-size="108" font-family="Avenir Next, Helvetica, Arial, sans-serif" font-weight="800">CLI Remote</text>
+  <text x="952" y="376" fill="#9E4D24" font-size="34" font-family="Avenir Next, Helvetica, Arial, sans-serif" font-weight="700" letter-spacing="2">PAIRED DEVICES, LIVE CONTROL, SHARED OUTPUT</text>
+  <text x="770" y="478" fill="#4C4641" font-size="30" font-family="Avenir Next, Helvetica, Arial, sans-serif">
+    <tspan x="770" dy="0">This one leans harder into the bridge between phone and host.</tspan>
+    <tspan x="770" dy="44">It is distinctive, but more abstract than the other two directions.</tspan>
+  </text>
+  <text x="770" y="620" fill="#2E2B27" font-size="26" font-family="Avenir Next, Helvetica, Arial, sans-serif" font-weight="700">Why it works</text>
+  <text x="770" y="664" fill="#6A615A" font-size="28" font-family="Avenir Next, Helvetica, Arial, sans-serif">
+    <tspan x="770" dy="0">Distinctive enough to own as an original brand mark.</tspan>
+    <tspan x="770" dy="42">Strong story for remote phone-to-workspace control.</tspan>
+    <tspan x="770" dy="42">Needs more onboarding before users read it instantly.</tspan>
+  </text>
+</svg>

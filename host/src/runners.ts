@@ -22,6 +22,8 @@ export interface RuntimeRun {
   stdoutTail: string;
   stderrTail: string;
   cancelTimer: NodeJS.Timeout | null;
+  cancelRequestedByUser: boolean;
+  sendSignal: (signal: NodeJS.Signals) => void;
   runner: WorkspaceRunner;
   state: unknown;
 }
@@ -29,6 +31,7 @@ export interface RuntimeRun {
 export interface SpawnRunArgs {
   session: SessionRecord;
   workspace: WorkspaceConfig;
+  model: string | null;
   prompt: string;
   resume: boolean;
   daemonUrl: string;
@@ -50,6 +53,7 @@ export interface RunnerControls {
   updateSessionMetadata(
     sessionId: string,
     input: {
+      model?: string | null;
       providerSessionId?: string | null;
       geminiSessionId?: string | null;
       transcriptPath?: string | null;
@@ -73,6 +77,7 @@ export interface WorkspaceRunner {
   spawnRun(args: SpawnRunArgs): {
     child: ChildProcessWithoutNullStreams;
     state: unknown;
+    sendSignal?: (signal: NodeJS.Signals) => void;
   };
   handleStdoutChunk?(
     runtime: RuntimeRun,

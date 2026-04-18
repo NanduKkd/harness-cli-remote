@@ -2,8 +2,9 @@
 
 Hooks-first remote control for Gemini CLI and Codex CLI with:
 
-- `host/`: a Fastify + TypeScript daemon that starts Gemini or Codex headless turns, persists session history in SQLite, ingests hook telemetry, and streams session events over WebSocket.
+- `host/`: a Fastify + TypeScript daemon that starts Gemini or Codex headless turns, persists session history and shared artifacts in SQLite, ingests hook telemetry, exposes artifact downloads, and streams session events over WebSocket.
 - `app/`: a Flutter Android client that pairs with the host, lists workspaces, creates sessions, resumes conversations, shows live output, and cancels active runs.
+- Session creation and follow-up prompts can carry an optional model override. The app stores the latest model per session, the host persists it on each run, and the provider CLIs receive it as `gemini --model <id>` or Codex `-m <id>`.
 
 ## Host setup
 
@@ -23,7 +24,7 @@ npm install
 3. Install the required CLIs for the workspaces you configured:
 
 - Gemini workspaces need `gemini` on `PATH`.
-- Codex workspaces need `codex` on `PATH`. Sign in once locally or provide Codex auth the same way you normally run `codex exec`.
+- Codex workspaces look for `CODEX_BIN`, then `PATH`, then common macOS install locations such as `/Applications/Codex.app/Contents/Resources/codex`. Sign in once locally or provide Codex auth the same way you normally run `codex exec`.
 
 4. Install the workspace hook bridges into each configured workspace:
 
@@ -33,6 +34,8 @@ npm run dev -- bootstrap --config ./config/local.json
 ```
 
 This step is optional on the latest build because `serve` now auto-installs the bridge for every configured workspace on startup. It is still useful if you want to preinstall hooks before launching the daemon.
+
+For Gemini workspaces this also writes a project-local MCP server entry that exposes the `share_file` tool used for mobile artifact sharing.
 
 5. Start the daemon:
 
@@ -73,4 +76,6 @@ flutter run
 - Follow-up prompts use `gemini --resume <session-uuid> -p` for Gemini workspaces and `codex exec resume <thread-id>` for Codex workspaces.
 - The host daemon uses Gemini hooks for Gemini telemetry and `codex exec --json` plus a Codex `SessionStart` hook for Codex telemetry.
 - Hook installation preserves existing hooks and appends the provider-specific Gemini Remote bridge alongside them.
+- Gemini workspaces get a project-local MCP server entry in `.gemini/settings.json` for the `share_file` tool. Codex workspaces receive the same MCP server via per-run CLI config overrides instead of a persistent workspace config edit.
+- Shared artifacts are copied into the host data directory before download, so the mobile app receives a stable snapshot rather than a live workspace path.
 - If a workspace already has custom hooks, those hooks still run and can affect Gemini or Codex behavior.

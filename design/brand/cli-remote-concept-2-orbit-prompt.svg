@@ -1,0 +1,56 @@
+<svg width="1600" height="900" viewBox="0 0 1600 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="orbitGlow" x1="152" y1="188" x2="640" y2="720" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#3A3530"/>
+      <stop offset="1" stop-color="#181614"/>
+    </linearGradient>
+    <linearGradient id="orbitAccent" x1="268" y1="270" x2="552" y2="552" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F0BE6E"/>
+      <stop offset="1" stop-color="#CD6A33"/>
+    </linearGradient>
+    <filter id="shadowOrbit" x="98" y="116" width="640" height="648" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="22" stdDeviation="26" flood-color="#161412" flood-opacity="0.22"/>
+    </filter>
+  </defs>
+  <rect width="1600" height="900" fill="#F7F1E8"/>
+  <text x="100" y="96" fill="#9E4D24" font-size="28" font-family="Avenir Next, Helvetica, Arial, sans-serif" font-weight="700" letter-spacing="4">CONCEPT 2</text>
+  <text x="100" y="158" fill="#2E2B27" font-size="64" font-family="Avenir Next, Helvetica, Arial, sans-serif" font-weight="800">Orbit Prompt</text>
+  <text x="100" y="210" fill="#6A615A" font-size="28" font-family="Avenir Next, Helvetica, Arial, sans-serif">More product-brand than utility icon. Stronger for a broader identity system.</text>
+
+  <g filter="url(#shadowOrbit)">
+    <rect x="120" y="210" width="520" height="520" rx="148" fill="url(#orbitGlow)"/>
+  </g>
+  <circle cx="380" cy="470" r="152" stroke="#E8D7C2" stroke-width="26"/>
+  <path d="M226 470C226 354 320 260 436 260" stroke="url(#orbitAccent)" stroke-width="24" stroke-linecap="round"/>
+  <path d="M534 470C534 586 440 680 324 680" stroke="#F1BE6A" stroke-width="24" stroke-linecap="round"/>
+  <circle cx="452" cy="284" r="18" fill="#F1BE6A"/>
+  <circle cx="308" cy="656" r="18" fill="#CD6A33"/>
+  <circle cx="380" cy="470" r="98" fill="#F8F1E8"/>
+  <text x="296" y="515" fill="#2E2B27" font-size="132" font-family="Menlo, Monaco, Consolas, monospace" font-weight="700">&gt;_</text>
+  <path d="M234 344C280 312 338 294 398 294" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round" opacity="0.24"/>
+  <path d="M362 646C422 646 476 626 518 592" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round" opacity="0.18"/>
+
+  <g transform="translate(770 254)">
+    <rect x="0" y="0" width="144" height="144" rx="40" fill="#201C1A"/>
+    <circle cx="72" cy="72" r="40" fill="#F8F1E8"/>
+    <circle cx="72" cy="72" r="60" stroke="#E8D7C2" stroke-width="8"/>
+    <path d="M14 72C14 40 40 14 72 14" stroke="#CD6A33" stroke-width="8" stroke-linecap="round"/>
+    <path d="M130 72C130 104 104 130 72 130" stroke="#F1BE6A" stroke-width="8" stroke-linecap="round"/>
+    <circle cx="78" cy="22" r="6" fill="#F1BE6A"/>
+    <circle cx="62" cy="122" r="6" fill="#CD6A33"/>
+    <text x="40" y="87" fill="#2E2B27" font-size="34" font-family="Menlo, Monaco, Consolas, monospace" font-weight="700">&gt;_</text>
+  </g>
+
+  <text x="952" y="314" fill="#2E2B27" font-size="108" font-family="Avenir Next, Helvetica, Arial, sans-serif" font-weight="800">CLI Remote</text>
+  <text x="952" y="376" fill="#9E4D24" font-size="34" font-family="Avenir Next, Helvetica, Arial, sans-serif" font-weight="700" letter-spacing="2">WORKSPACES, RUNS, THREADS, ARTIFACTS</text>
+  <text x="770" y="478" fill="#4C4641" font-size="30" font-family="Avenir Next, Helvetica, Arial, sans-serif">
+    <tspan x="770" dy="0">This direction treats each session like an orbiting thread.</tspan>
+    <tspan x="770" dy="44">It feels a bit more premium and less obviously "app utility".</tspan>
+  </text>
+  <text x="770" y="620" fill="#2E2B27" font-size="26" font-family="Avenir Next, Helvetica, Arial, sans-serif" font-weight="700">Why it works</text>
+  <text x="770" y="664" fill="#6A615A" font-size="28" font-family="Avenir Next, Helvetica, Arial, sans-serif">
+    <tspan x="770" dy="0">Good foundation for a future marketing site.</tspan>
+    <tspan x="770" dy="42">Feels neutral across Gemini and Codex providers.</tspan>
+    <tspan x="770" dy="42">Slightly less legible than Concept 1 at tiny sizes.</tspan>
+  </text>
+</svg>

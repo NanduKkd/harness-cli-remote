@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" width="800" height="600">
+  <defs>
+    <linearGradient id="wave" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#06b6d4" />
+      <stop offset="50%" stop-color="#3b82f6" />
+      <stop offset="100%" stop-color="#8b5cf6" />
+    </linearGradient>
+    <linearGradient id="card" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#1e293b" />
+      <stop offset="100%" stop-color="#0f172a" />
+    </linearGradient>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000" flood-opacity="0.6"/>
+    </filter>
+  </defs>
+
+  <rect width="800" height="600" fill="#0b0f19" />
+
+  <rect x="150" y="150" width="500" height="300" rx="24" fill="url(#card)" filter="url(#shadow)" />
+  
+  <circle cx="180" cy="184" r="8" fill="#ef4444" />
+  <circle cx="205" cy="184" r="8" fill="#eab308" />
+  <circle cx="230" cy="184" r="8" fill="#22c55e" />
+
+  <path d="M200 240 L240 280 L200 320" fill="none" stroke="#38bdf8" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" />
+  
+  <path d="M270 280 Q 380 180 480 280 T 630 250" fill="none" stroke="url(#wave)" stroke-width="20" stroke-linecap="round" />
+</svg>

@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgSonic" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#020617" />
+      <stop offset="100%" stop-color="#0f172a" />
+    </linearGradient>
+    <linearGradient id="wing" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00f2fe" />
+      <stop offset="100%" stop-color="#4facfe" />
+    </linearGradient>
+    <linearGradient id="wingDark" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4facfe" />
+      <stop offset="100%" stop-color="#005bea" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bgSonic)" />
+  <g transform="translate(256, 256)">
+    <!-- Motion lines -->
+    <path d="M-120 40 L-200 40 M-100 80 L-180 80 M-140 0 L-220 0" stroke="#334155" stroke-width="8" stroke-linecap="round" />
+    
+    <!-- Main delta shape -->
+    <path d="M -100 120 L 160 0 L -100 -120 L -60 0 Z" fill="url(#wingDark)" />
+    <path d="M -100 120 L 160 0 L -60 0 Z" fill="url(#wing)" />
+    
+    <!-- Leading edge highlight -->
+    <path d="M -100 -120 L 160 0" stroke="#ffffff" stroke-width="4" opacity="0.5" />
+  </g>
+</svg>

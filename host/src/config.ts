@@ -57,6 +57,10 @@ export function loadConfig(configPathArg?: string): ResolvedConfig {
       host: parsed.server.host,
       port: parsed.server.port,
       databasePath: path.resolve(configDir, parsed.server.databasePath),
+      artifactsPath: path.resolve(
+        path.dirname(path.resolve(configDir, parsed.server.databasePath)),
+        'artifacts',
+      ),
     },
     workspaces,
   };

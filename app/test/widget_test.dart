@@ -2,12 +2,16 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 
 import 'package:gemini_remote_app/src/models.dart';
 import 'package:gemini_remote_app/src/screens/pair_screen.dart';
+import 'package:gemini_remote_app/src/screens/session_detail_screen.dart';
+import 'package:gemini_remote_app/src/services/api_client.dart';
 import 'package:gemini_remote_app/src/services/auth_storage.dart';
+import 'package:gemini_remote_app/src/services/realtime_service.dart';
 import 'package:gemini_remote_app/src/state/app_state.dart';
 
 class FakeAuthStorage extends AuthStorage {
@@ -32,7 +36,9 @@ class FakeAuthStorage extends AuthStorage {
 class FakeHttpClient extends http.BaseClient {
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
-    if (request.method == 'GET' && request.url.path == '/health') {
+    final requestPath = request.url.path;
+    if (request.method == 'GET' &&
+        (requestPath == '/health' || requestPath.endsWith('/health'))) {
       return http.StreamedResponse(
         Stream<List<int>>.value(utf8.encode('{"ok":true}')),
         200,
@@ -50,6 +56,26 @@ class FakeHttpClient extends http.BaseClient {
 
   @override
   void close() {}
+}
+
+class FakeSessionApiClient extends ApiClient {
+  FakeSessionApiClient({required this.sessions, required this.events})
+    : super(const AuthSession(baseUrl: 'http://127.0.0.1:8918', token: 't'));
+
+  final List<RemoteSession> sessions;
+  final List<SessionEvent> events;
+
+  @override
+  Future<List<RemoteSession>> listSessions(String workspaceId) async =>
+      sessions;
+
+  @override
+  Future<List<SessionEvent>> getEvents({
+    required String sessionId,
+    required int afterSeq,
+  }) async {
+    return events.where((event) => event.seq > afterSeq).toList();
+  }
 }
 
 class FakeAuthController extends AuthController {
@@ -127,5 +153,135 @@ void main() {
     expect(controller.lastCode, '123-456');
     expect(storage.lastWrittenSession?.baseUrl, host);
     expect(find.textContaining('Pairing succeeded'), findsOneWidget);
+  });
+
+  testWidgets('preserves path-prefixed hosts during pairing', (
+    WidgetTester tester,
+  ) async {
+    final storage = FakeAuthStorage();
+    final controller = FakeAuthController(storage);
+    final httpClient = FakeHttpClient();
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          authStorageProvider.overrideWithValue(storage),
+          authControllerProvider.overrideWith((ref) => controller),
+          httpClientProvider.overrideWithValue(httpClient),
+        ],
+        child: const MaterialApp(home: PairScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.byKey(const ValueKey('pair-host-field')),
+      'http://127.0.0.1:8918/ieb8izzxc0bt/',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('pair-code-field')),
+      '123-456',
+    );
+    await tester.tap(find.text('Pair and connect'));
+    await tester.pumpAndSettle();
+
+    expect(controller.lastBaseUrl, 'http://127.0.0.1:8918/ieb8izzxc0bt');
+    expect(
+      storage.lastWrittenSession?.baseUrl,
+      'http://127.0.0.1:8918/ieb8izzxc0bt',
+    );
+    expect(find.textContaining('Pairing succeeded'), findsOneWidget);
+  });
+
+  testWidgets('long pressing an AI message copies it to the clipboard', (
+    WidgetTester tester,
+  ) async {
+    const copiedMessage = 'Copy this AI reply';
+    final now = DateTime(2026, 4, 10, 12, 0);
+    const workspace = Workspace(
+      id: 'workspace-1',
+      name: 'Workspace',
+      rootPath: '/tmp/workspace',
+      provider: 'gemini',
+      hookStatus: 'installed',
+    );
+    final session = RemoteSession(
+      id: 'session-1',
+      workspaceId: workspace.id,
+      model: 'gemini-2.5-pro',
+      providerSessionId: 'provider-session-1',
+      geminiSessionId: 'provider-session-1',
+      transcriptPath: '/tmp/transcript.jsonl',
+      status: 'completed',
+      lastMessageStatus: 'completed',
+      createdAt: now,
+      updatedAt: now,
+      lastActivityAt: now,
+      lastRunId: 'run-1',
+    );
+    final apiClient = FakeSessionApiClient(
+      sessions: [session],
+      events: [
+        SessionEvent(
+          sessionId: session.id,
+          runId: 'run-1',
+          seq: 1,
+          type: 'message.completed',
+          ts: now,
+          payload: const {'text': copiedMessage},
+        ),
+      ],
+    );
+    final realtimeService = RealtimeService();
+    final clipboardCalls = <MethodCall>[];
+    String? clipboardText;
+
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        clipboardCalls.add(call);
+        if (call.method == 'Clipboard.setData') {
+          clipboardText =
+              (call.arguments as Map<Object?, Object?>)['text'] as String?;
+          return null;
+        }
+        if (call.method == 'Clipboard.getData') {
+          return <String, dynamic>{'text': clipboardText};
+        }
+        return null;
+      },
+    );
+    addTearDown(() {
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      );
+      realtimeService.dispose();
+    });
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          apiClientProvider.overrideWithValue(apiClient),
+          realtimeServiceProvider.overrideWithValue(realtimeService),
+        ],
+        child: MaterialApp(
+          home: SessionDetailScreen(workspace: workspace, session: session),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text(copiedMessage), findsOneWidget);
+
+    await tester.longPress(find.text(copiedMessage));
+    await tester.pump();
+
+    expect(clipboardText, copiedMessage);
+    expect(
+      clipboardCalls.where((call) => call.method == 'Clipboard.setData'),
+      isNotEmpty,
+    );
+    expect(find.text('Copied AI message to clipboard.'), findsOneWidget);
   });
 }

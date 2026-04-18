@@ -1,5 +1,8 @@
 import { spawn } from 'node:child_process';
+import os from 'node:os';
+import path from 'node:path';
 
+import { buildCodexArtifactMcpConfig } from './artifactMcp.js';
 import type { HookIngressBody, RunRecord } from './types.js';
 import type {
   RunnerControls,
@@ -8,6 +11,7 @@ import type {
   SpawnRunArgs,
   WorkspaceRunner,
 } from './runners.js';
+import { resolveExecutable } from './executableResolver.js';
 import { nowIso, summarizeJson } from './util.js';
 
 type CodexRuntimeState = {
@@ -29,24 +33,57 @@ export class CodexRunner implements WorkspaceRunner {
   readonly provider = 'codex' as const;
 
   spawnRun(args: SpawnRunArgs) {
-    const { session, workspace, prompt, resume, daemonUrl, hookToken, runId } = args;
+    const { session, workspace, model, prompt, resume, daemonUrl, hookToken, runId } = args;
+    const useProcessGroupSignals = process.platform !== 'win32';
     const child = spawn(
-      process.env.CODEX_BIN ?? 'codex',
-      buildCodexArgs(session.providerSessionId, prompt, resume),
+      resolveExecutable('codex', {
+        envVar: 'CODEX_BIN',
+        fallbackPaths: [
+          '/Applications/Codex.app/Contents/Resources/codex',
+          path.join(
+            os.homedir(),
+            'Applications',
+            'Codex.app',
+            'Contents',
+            'Resources',
+            'codex',
+          ),
+          '/opt/homebrew/bin/codex',
+          '/usr/local/bin/codex',
+          path.join(os.homedir(), '.local', 'bin', 'codex'),
+        ],
+      }),
+      buildCodexArgs(
+        session.providerSessionId,
+        prompt,
+        resume,
+        {
+          daemonUrl,
+          sessionId: session.id,
+          runId,
+          hookToken,
+          workspaceRoot: workspace.rootPath,
+        },
+        model,
+      ),
       {
         cwd: workspace.rootPath,
+        detached: useProcessGroupSignals,
         env: {
           ...process.env,
           REMOTE_DAEMON_URL: daemonUrl,
           REMOTE_HOOK_TOKEN: hookToken,
           REMOTE_SESSION_ID: session.id,
           REMOTE_RUN_ID: runId,
+          REMOTE_WORKSPACE_ROOT: workspace.rootPath,
         },
       },
     );
 
     return {
       child,
+      sendSignal: (signal: NodeJS.Signals) =>
+        sendCodexSignal(child, signal, useProcessGroupSignals),
       state: {
         lineBuffer: '',
         messageTextByItemId: new Map(),
@@ -323,18 +360,71 @@ export class CodexRunner implements WorkspaceRunner {
   }
 }
 
-function buildCodexArgs(
+function sendCodexSignal(
+  child: ReturnType<typeof spawn>,
+  signal: NodeJS.Signals,
+  useProcessGroupSignals: boolean,
+): void {
+  if (useProcessGroupSignals && child.pid != null) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch (error) {
+      if (!isMissingProcessError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  try {
+    child.kill(signal);
+  } catch (error) {
+    if (!isMissingProcessError(error)) {
+      throw error;
+    }
+  }
+}
+
+function isMissingProcessError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as NodeJS.ErrnoException).code === 'ESRCH'
+  );
+}
+
+export function buildCodexArgs(
   sessionId: string | null,
   prompt: string,
   resume: boolean,
+  mcpConfig: {
+    daemonUrl: string;
+    sessionId: string;
+    runId: string;
+    hookToken: string;
+    workspaceRoot: string;
+  } = {
+    daemonUrl: 'http://127.0.0.1:8918',
+    sessionId: 'session-test',
+    runId: 'run-test',
+    hookToken: 'hook-test',
+    workspaceRoot: process.cwd(),
+  },
+  model: string | null = null,
 ): string[] {
+  const mcpArgs = buildCodexArtifactMcpConfig(mcpConfig);
+  const modelArgs = model ? ['-m', model] : [];
+
   if (resume) {
     return [
+      ...mcpArgs,
+      ...modelArgs,
       'exec',
       'resume',
       sessionId ?? '',
       '--json',
-      '--full-auto',
+      '--dangerously-bypass-approvals-and-sandbox',
       '--enable',
       'codex_hooks',
       '--skip-git-repo-check',
@@ -343,9 +433,11 @@ function buildCodexArgs(
   }
 
   return [
+    ...mcpArgs,
+    ...modelArgs,
     'exec',
     '--json',
-    '--full-auto',
+    '--dangerously-bypass-approvals-and-sandbox',
     '--enable',
     'codex_hooks',
     '--skip-git-repo-check',

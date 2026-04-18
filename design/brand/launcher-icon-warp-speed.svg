@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <radialGradient id="warpBg" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#1e1b4b" />
+      <stop offset="100%" stop-color="#000000" />
+    </radialGradient>
+    <linearGradient id="trail1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0ea5e9" stop-opacity="0" />
+      <stop offset="100%" stop-color="#0ea5e9" stop-opacity="1" />
+    </linearGradient>
+    <linearGradient id="trail2" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#8b5cf6" stop-opacity="0" />
+      <stop offset="100%" stop-color="#8b5cf6" stop-opacity="1" />
+    </linearGradient>
+    <linearGradient id="trail3" x1="50%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#f43f5e" stop-opacity="0" />
+      <stop offset="100%" stop-color="#f43f5e" stop-opacity="1" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#warpBg)" />
+  <g transform="translate(256, 256)">
+    <path d="M-150 -150 L-30 -30" stroke="url(#trail1)" stroke-width="16" stroke-linecap="round" />
+    <path d="M150 -150 L30 -30" stroke="url(#trail2)" stroke-width="16" stroke-linecap="round" />
+    <path d="M-150 150 L-30 30" stroke="url(#trail2)" stroke-width="16" stroke-linecap="round" />
+    <path d="M150 150 L30 30" stroke="url(#trail1)" stroke-width="16" stroke-linecap="round" />
+    <path d="M0 -200 L0 -40" stroke="url(#trail3)" stroke-width="20" stroke-linecap="round" />
+    <path d="M0 200 L0 40" stroke="url(#trail3)" stroke-width="20" stroke-linecap="round" />
+    <circle cx="0" cy="0" r="16" fill="#ffffff" filter="drop-shadow(0 0 10px #ffffff)" />
+  </g>
+</svg>

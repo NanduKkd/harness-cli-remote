@@ -15,6 +15,7 @@ export interface ResolvedConfig {
     host: string;
     port: number;
     databasePath: string;
+    artifactsPath: string;
   };
   workspaces: WorkspaceConfig[];
   configPath: string;
@@ -32,6 +33,7 @@ export interface WorkspaceRepairRecord extends WorkspaceRecord {
 export interface SessionRecord {
   id: string;
   workspaceId: string;
+  model: string | null;
   providerSessionId: string | null;
   geminiSessionId: string | null;
   transcriptPath: string | null;
@@ -41,11 +43,13 @@ export interface SessionRecord {
   updatedAt: string;
   lastActivityAt: string;
   lastRunId: string | null;
+  lastPrompt: string | null;
 }
 
 export interface RunRecord {
   id: string;
   sessionId: string;
+  model: string | null;
   status: RunStatus;
   prompt: string;
   startedAt: string;
@@ -79,10 +83,48 @@ export interface BroadcastEnvelope {
   event: SessionEventRecord;
 }
 
+export interface ArtifactRecord {
+  id: string;
+  sessionId: string;
+  runId: string;
+  workspaceId: string;
+  sourcePath: string;
+  storedPath: string;
+  filename: string;
+  mediaType: string;
+  sizeBytes: number;
+  sha256: string;
+  createdAt: string;
+}
+
+export interface ArtifactViewRecord {
+  id: string;
+  sessionId: string;
+  runId: string;
+  workspaceId: string;
+  sourcePath: string;
+  filename: string;
+  mediaType: string;
+  sizeBytes: number;
+  sha256: string;
+  createdAt: string;
+  downloadPath: string;
+}
+
+export interface ArtifactRegistrationBody {
+  remoteSessionId: string;
+  remoteRunId: string;
+  path: string;
+  title?: string | null;
+  mimeType?: string | null;
+  requestedAt: string;
+}
+
 export interface SessionExportRecord {
   exportedAt: string;
   workspace: WorkspaceRecord;
   session: SessionRecord;
   runs: RunRecord[];
   events: SessionEventRecord[];
+  artifacts: ArtifactViewRecord[];
 }

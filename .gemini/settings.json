@@ -84,5 +84,20 @@
         ]
       }
     ]
+  },
+  "mcpServers": {
+    "gemini_remote_artifacts": {
+      "command": "node",
+      "args": [
+        "/Users/nandakrishnan/applca/gemini-remote/host/scripts/file-share-mcp-server.js"
+      ],
+      "env": {
+        "REMOTE_DAEMON_URL": "${REMOTE_DAEMON_URL}",
+        "REMOTE_SESSION_ID": "${REMOTE_SESSION_ID}",
+        "REMOTE_RUN_ID": "${REMOTE_RUN_ID}",
+        "REMOTE_HOOK_TOKEN": "${REMOTE_HOOK_TOKEN}",
+        "REMOTE_WORKSPACE_ROOT": "${REMOTE_WORKSPACE_ROOT}"
+      }
+    }
   }
 }

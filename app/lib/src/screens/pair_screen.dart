@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../base_url.dart';
 import '../state/app_state.dart';
 import '../widgets/chrome.dart';
 
@@ -103,7 +104,7 @@ class _PairScreenState extends ConsumerState<PairScreen> {
 
   Future<bool> _probeHost(String baseUrl) async {
     final client = ref.read(httpClientProvider);
-    final uri = Uri.parse(baseUrl).replace(path: '/health');
+    final uri = resolveBaseUrlPath(baseUrl, '/health');
     final response = await client.get(uri).timeout(const Duration(seconds: 4));
     if (response.statusCode >= 400) {
       throw Exception('Host responded with ${response.statusCode}.');
@@ -161,21 +162,12 @@ class _PairScreenState extends ConsumerState<PairScreen> {
 
     try {
       await _probeHost(baseUrl);
-      _setStatus(
-        'Host reachable at $baseUrl.',
-        colorScheme.primary,
-      );
+      _setStatus('Host reachable at $baseUrl.', colorScheme.primary);
     } on TimeoutException {
-      _setStatus(
-        'Host check timed out for $baseUrl.',
-        colorScheme.error,
-      );
+      _setStatus('Host check timed out for $baseUrl.', colorScheme.error);
       _showSnackBar('Timed out reaching $baseUrl.');
     } catch (error) {
-      _setStatus(
-        'Could not reach $baseUrl.',
-        colorScheme.error,
-      );
+      _setStatus('Could not reach $baseUrl.', colorScheme.error);
       _showSnackBar(error.toString());
     } finally {
       if (mounted) {
@@ -218,16 +210,10 @@ class _PairScreenState extends ConsumerState<PairScreen> {
         colorScheme.primary,
       );
     } on TimeoutException {
-      _setStatus(
-        'Host check timed out for $baseUrl.',
-        colorScheme.error,
-      );
+      _setStatus('Host check timed out for $baseUrl.', colorScheme.error);
       _showSnackBar('Timed out reaching $baseUrl.');
     } catch (error) {
-      _setStatus(
-        'Pairing failed for $baseUrl.',
-        colorScheme.error,
-      );
+      _setStatus('Pairing failed for $baseUrl.', colorScheme.error);
       _showSnackBar(error.toString());
     } finally {
       if (mounted) {
@@ -261,7 +247,7 @@ class _PairScreenState extends ConsumerState<PairScreen> {
     });
 
     return AtmosphereScaffold(
-      title: 'Pair Host',
+      title: 'Code Remotely',
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [

@@ -3,10 +3,13 @@ import 'dart:async';
 import 'package:http/http.dart' as http;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../base_url.dart';
 import '../models.dart';
 import '../services/api_client.dart';
+import '../services/artifact_download_bridge.dart';
 import '../services/auth_storage.dart';
 import '../services/realtime_service.dart';
+import '../services/session_monitor_bridge.dart';
 
 final authStorageProvider = Provider<AuthStorage>((ref) => const AuthStorage());
 
@@ -22,6 +25,10 @@ final apiClientProvider = Provider<ApiClient?>((ref) {
   return auth == null ? null : ApiClient(auth);
 });
 
+final artifactDownloadBridgeProvider = Provider<ArtifactDownloadBridge>(
+  (ref) => const ArtifactDownloadBridge(),
+);
+
 final recentHostsProvider = FutureProvider<List<String>>((ref) async {
   return ref.read(authStorageProvider).readRecentHosts();
 });
@@ -36,6 +43,10 @@ final realtimeServiceProvider = Provider<RealtimeService>((ref) {
   final service = RealtimeService();
   ref.onDispose(service.dispose);
   return service;
+});
+
+final sessionMonitorBridgeProvider = Provider<SessionMonitorBridge>((ref) {
+  return const SessionMonitorBridge();
 });
 
 final workspacesProvider = FutureProvider<List<Workspace>>((ref) async {
@@ -81,30 +92,4 @@ class AuthController extends StateNotifier<AsyncValue<AuthSession?>> {
     await _storage.clear();
     state = const AsyncValue.data(null);
   }
-}
-
-String normalizeBaseUrl(String input) {
-  final trimmed = input.trim();
-  if (trimmed.isEmpty) {
-    return trimmed;
-  }
-
-  final withScheme =
-      trimmed.startsWith('http://') || trimmed.startsWith('https://')
-      ? trimmed
-      : 'http://$trimmed';
-  final uri = Uri.tryParse(withScheme);
-  if (uri == null || uri.host.isEmpty) {
-    throw const FormatException('Enter a valid host URL.');
-  }
-  if (uri.scheme != 'http' && uri.scheme != 'https') {
-    throw const FormatException(
-      'Host URL must start with http:// or https://.',
-    );
-  }
-
-  return uri
-      .replace(path: '', queryParameters: null, fragment: null)
-      .toString()
-      .replaceAll(RegExp(r'/$'), '');
 }

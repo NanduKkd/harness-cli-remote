@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -6,24 +8,50 @@ import '../state/app_state.dart';
 import '../widgets/chrome.dart';
 import 'session_detail_screen.dart';
 
-class SessionsScreen extends ConsumerWidget {
+class SessionsScreen extends ConsumerStatefulWidget {
   const SessionsScreen({super.key, required this.workspace});
 
   final Workspace workspace;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final sessions = ref.watch(sessionsProvider(workspace.id));
+  ConsumerState<SessionsScreen> createState() => _SessionsScreenState();
+}
+
+class _SessionsScreenState extends ConsumerState<SessionsScreen> {
+  StreamSubscription<RealtimeEnvelope>? _messageSubscription;
+  StreamSubscription<ConnectionStatus>? _statusSubscription;
+  ConnectionStatus _connectionStatus = ConnectionStatus.disconnected;
+
+  @override
+  void initState() {
+    super.initState();
+    final realtime = ref.read(realtimeServiceProvider);
+    _connectionStatus = realtime.status;
+    _messageSubscription = realtime.messages.listen(_handleRealtimeEvent);
+    _statusSubscription = realtime.statuses.listen(_handleConnectionStatus);
+  }
+
+  @override
+  void dispose() {
+    _messageSubscription?.cancel();
+    _statusSubscription?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final sessions = ref.watch(sessionsProvider(widget.workspace.id));
 
     return AtmosphereScaffold(
-      title: workspace.name,
+      title: widget.workspace.name,
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _onNewSessionPressed(context, ref),
         icon: const Icon(Icons.play_circle_fill),
         label: const Text('New session'),
       ),
       body: RefreshIndicator(
-        onRefresh: () => ref.refresh(sessionsProvider(workspace.id).future),
+        onRefresh: () =>
+            ref.refresh(sessionsProvider(widget.workspace.id).future),
         child: sessions.when(
           data: (items) {
             if (items.isEmpty) {
@@ -32,8 +60,8 @@ class SessionsScreen extends ConsumerWidget {
                 children: [
                   EmptyStateCard(
                     title: 'No sessions yet',
-                    body: workspace.hookStatus == 'installed'
-                        ? 'Start a new ${providerDisplayName(workspace.provider)} turn for this workspace.'
+                    body: widget.workspace.hookStatus == 'installed'
+                        ? 'Start a new ${providerDisplayName(widget.workspace.provider)} turn for this workspace.'
                         : 'Bootstrap hooks on the host before creating sessions.',
                   ),
                 ],
@@ -54,7 +82,7 @@ class SessionsScreen extends ConsumerWidget {
                     Navigator.of(context).push(
                       MaterialPageRoute<void>(
                         builder: (_) => SessionDetailScreen(
-                          workspace: workspace,
+                          workspace: widget.workspace,
                           session: session,
                         ),
                       ),
@@ -71,7 +99,7 @@ class SessionsScreen extends ConsumerWidget {
                           children: [
                             Expanded(
                               child: Text(
-                                session.id,
+                                _sessionTitle(session),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: Theme.of(context).textTheme.titleSmall
@@ -93,6 +121,11 @@ class SessionsScreen extends ConsumerWidget {
                           'Last Updated ${_formatTime(session.lastActivityAt)}',
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
+                        if (session.model != null)
+                          Text(
+                            'Model ${modelDisplayLabel(session.model)}',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
                       ],
                     ),
                   ),
@@ -117,67 +150,160 @@ class SessionsScreen extends ConsumerWidget {
     );
   }
 
-  Future<void> _openCreateDialog(BuildContext context, WidgetRef ref) async {
-    final controller = TextEditingController();
-    final api = ref.read(apiClientProvider);
-    if (api == null) {
+  void _handleRealtimeEvent(RealtimeEnvelope envelope) {
+    if (envelope.workspaceId != widget.workspace.id) {
       return;
     }
 
-    final prompt = await showModalBottomSheet<String>(
+    if (_eventAffectsSessionSummary(envelope.event.type)) {
+      ref.invalidate(sessionsProvider(widget.workspace.id));
+    }
+  }
+
+  void _handleConnectionStatus(ConnectionStatus status) {
+    final shouldCatchUp =
+        _connectionStatus != ConnectionStatus.connected &&
+        status == ConnectionStatus.connected;
+    _connectionStatus = status;
+    if (shouldCatchUp) {
+      ref.invalidate(sessionsProvider(widget.workspace.id));
+    }
+  }
+
+  Future<void> _openCreateDialog(BuildContext context, WidgetRef ref) async {
+    final promptController = TextEditingController();
+    final customModelController = TextEditingController();
+    final modelOptions = providerModelOptions(widget.workspace.provider);
+    var selectedModelValue = defaultProviderModelValue;
+    final api = ref.read(apiClientProvider);
+    if (api == null) {
+      promptController.dispose();
+      customModelController.dispose();
+      return;
+    }
+
+    final draft = await showModalBottomSheet<_SessionDraft>(
       context: context,
       isScrollControlled: true,
       builder: (context) {
-        return Padding(
-          padding: EdgeInsets.only(
-            left: 14,
-            right: 14,
-            top: 14,
-            bottom: 14 + MediaQuery.viewInsetsOf(context).bottom,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            spacing: 10,
-            children: [
-              Text(
-                'Start a remote ${providerDisplayName(workspace.provider)} session',
-                style: Theme.of(
-                  context,
-                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            final showCustomModel =
+                selectedModelValue == customProviderModelValue;
+            return Padding(
+              padding: EdgeInsets.only(
+                left: 14,
+                right: 14,
+                top: 14,
+                bottom: 14 + MediaQuery.viewInsetsOf(context).bottom,
               ),
-              TextField(
-                controller: controller,
-                minLines: 2,
-                maxLines: 5,
-                decoration: const InputDecoration(labelText: 'Initial prompt'),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                spacing: 10,
+                children: [
+                  Text(
+                    'Start a remote ${providerDisplayName(widget.workspace.provider)} session',
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  TextField(
+                    controller: promptController,
+                    minLines: 2,
+                    maxLines: 5,
+                    decoration: const InputDecoration(
+                      labelText: 'Initial prompt',
+                    ),
+                  ),
+                  DropdownButtonFormField<String>(
+                    key: ValueKey('session-model-$selectedModelValue'),
+                    initialValue: selectedModelValue,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Model',
+                    ),
+                    items: [
+                      const DropdownMenuItem<String>(
+                        value: defaultProviderModelValue,
+                        child: Text('Use provider default'),
+                      ),
+                      ...modelOptions.map(
+                        (option) => DropdownMenuItem<String>(
+                          value: option.value,
+                          child: Text(option.label),
+                        ),
+                      ),
+                      const DropdownMenuItem<String>(
+                        value: customProviderModelValue,
+                        child: Text('Custom model id'),
+                      ),
+                    ],
+                    onChanged: (value) {
+                      setModalState(() {
+                        selectedModelValue = value ?? defaultProviderModelValue;
+                      });
+                    },
+                  ),
+                  if (showCustomModel)
+                    TextField(
+                      controller: customModelController,
+                      decoration: const InputDecoration(
+                        labelText: 'Custom model id',
+                      ),
+                    ),
+                  Text(
+                    providerModelHelperText(widget.workspace.provider),
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  FilledButton(
+                    onPressed: () => Navigator.of(context).pop(
+                      _SessionDraft(
+                        prompt: promptController.text.trim(),
+                        model: _selectedModelFromDropdown(
+                          selectedValue: selectedModelValue,
+                          customValue: customModelController.text,
+                        ),
+                      ),
+                    ),
+                    child: const Text('Start session'),
+                  ),
+                ],
               ),
-              FilledButton(
-                onPressed: () =>
-                    Navigator.of(context).pop(controller.text.trim()),
-                child: const Text('Start session'),
-              ),
-            ],
-          ),
+            );
+          },
         );
       },
     );
+    promptController.dispose();
+    customModelController.dispose();
 
-    if (prompt == null || prompt.isEmpty) {
+    if (draft == null || draft.prompt.isEmpty) {
       return;
     }
 
     try {
       final session = await api.createSession(
-        workspaceId: workspace.id,
-        prompt: prompt,
+        workspaceId: widget.workspace.id,
+        prompt: draft.prompt,
+        model: draft.model,
       );
-      ref.invalidate(sessionsProvider(workspace.id));
+      final auth = ref.read(authControllerProvider).valueOrNull;
+      if (auth != null) {
+        unawaited(
+          ref
+              .read(sessionMonitorBridgeProvider)
+              .start(auth, sessionIds: [session.id]),
+        );
+      }
+      ref.invalidate(sessionsProvider(widget.workspace.id));
       if (context.mounted) {
         Navigator.of(context).push(
           MaterialPageRoute<void>(
-            builder: (_) =>
-                SessionDetailScreen(workspace: workspace, session: session),
+            builder: (_) => SessionDetailScreen(
+              workspace: widget.workspace,
+              session: session,
+            ),
           ),
         );
       }
@@ -191,11 +317,11 @@ class SessionsScreen extends ConsumerWidget {
   }
 
   void _onNewSessionPressed(BuildContext context, WidgetRef ref) {
-    if (workspace.hookStatus != 'installed') {
+    if (widget.workspace.hookStatus != 'installed') {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'This workspace is not ready yet. The host needs the ${providerDisplayName(workspace.provider)} hook bridge installed before sessions can start.',
+            'This workspace is not ready yet. The host needs the ${providerDisplayName(widget.workspace.provider)} hook bridge installed before sessions can start.',
           ),
         ),
       );
@@ -206,10 +332,61 @@ class SessionsScreen extends ConsumerWidget {
   }
 }
 
+bool _eventAffectsSessionSummary(String type) {
+  return type == 'message.completed' ||
+      type == 'run.started' ||
+      type == 'run.completed' ||
+      type == 'run.failed' ||
+      type == 'run.cancelled';
+}
+
 String _formatTime(DateTime value) {
   final local = value;
   final hour = local.hour % 12 == 0 ? 12 : local.hour % 12;
   final minute = local.minute.toString().padLeft(2, '0');
   final suffix = local.hour >= 12 ? 'PM' : 'AM';
   return '${local.month}/${local.day} $hour:$minute $suffix';
+}
+
+const int _sessionTitleWordLimit = 14;
+
+String _sessionTitle(RemoteSession session) {
+  final prompt = session.lastPrompt?.trim() ?? '';
+  if (prompt.isEmpty) {
+    return session.id;
+  }
+
+  final compact = prompt.replaceAll(RegExp(r'\s+'), ' ');
+  final words = compact.split(' ');
+  if (words.length <= _sessionTitleWordLimit) {
+    return compact;
+  }
+  return '${words.take(_sessionTitleWordLimit).join(' ')}...';
+}
+
+String? _normalizeModelInput(String raw) {
+  final trimmed = raw.trim();
+  return trimmed.isEmpty ? null : trimmed;
+}
+
+String? _selectedModelFromDropdown({
+  required String selectedValue,
+  required String customValue,
+}) {
+  if (selectedValue == defaultProviderModelValue) {
+    return null;
+  }
+
+  if (selectedValue == customProviderModelValue) {
+    return _normalizeModelInput(customValue);
+  }
+
+  return selectedValue;
+}
+
+class _SessionDraft {
+  const _SessionDraft({required this.prompt, required this.model});
+
+  final String prompt;
+  final String? model;
 }

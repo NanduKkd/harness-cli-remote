@@ -4,6 +4,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { getCodexHookStatus, installCodexHooks } from '../src/codexHookInstaller.js';
+import { installHooks } from '../src/hookInstaller.js';
 import { cleanupTempDir, makeTempDir } from './testUtils.js';
 
 test('installCodexHooks preserves unrelated hooks and de-duplicates the bridge entry', async (t) => {
@@ -63,4 +64,63 @@ test('installCodexHooks preserves unrelated hooks and de-duplicates the bridge e
     sessionStartHooks.some((hook) => hook.command === 'python3 ./existing-hook.py'),
   );
   assert.equal(getCodexHookStatus(tempDir), 'installed');
+});
+
+test('installHooks adds the Gemini artifact MCP server without removing existing settings', async (t) => {
+  const tempDir = await makeTempDir('gemini-remote-gemini-hooks-');
+  t.after(async () => {
+    await cleanupTempDir(tempDir);
+  });
+
+  const geminiDir = path.join(tempDir, '.gemini');
+  await mkdir(geminiDir, { recursive: true });
+  await writeFile(
+    path.join(geminiDir, 'settings.json'),
+    JSON.stringify(
+      {
+        mcpServers: {
+          existing: {
+            command: 'node',
+            args: ['existing.js'],
+          },
+        },
+      },
+      null,
+      2,
+    ),
+  );
+
+  installHooks({
+    id: 'workspace-1',
+    name: 'Workspace',
+    rootPath: tempDir,
+    provider: 'gemini',
+  });
+
+  const settings = JSON.parse(
+    await readFile(path.join(geminiDir, 'settings.json'), 'utf8'),
+  ) as {
+    hooks?: Record<string, unknown>;
+    mcpServers?: Record<
+      string,
+      {
+        command?: string;
+        args?: string[];
+        env?: Record<string, string>;
+      }
+    >;
+  };
+
+  assert.ok(settings.hooks?.SessionStart);
+  assert.deepEqual(settings.mcpServers?.existing?.args, ['existing.js']);
+  assert.equal(settings.mcpServers?.gemini_remote_artifacts?.command, 'node');
+  assert.ok(
+    settings.mcpServers?.gemini_remote_artifacts?.args?.[0]?.endsWith(
+      'host/scripts/file-share-mcp-server.js',
+    ),
+  );
+  assert.equal(
+    settings.mcpServers?.gemini_remote_artifacts?.env?.REMOTE_SESSION_ID,
+    '${REMOTE_SESSION_ID}',
+  );
 });

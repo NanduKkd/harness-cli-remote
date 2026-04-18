@@ -4,6 +4,7 @@ import path from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
 
 import type {
+  ArtifactRecord,
   RunRecord,
   RunStatus,
   SessionEventRecord,
@@ -17,6 +18,7 @@ import { createAccessToken, nowIso, sha256 } from './util.js';
 type RawSessionRow = {
   id: string;
   workspace_id: string;
+  model: string | null;
   provider_session_id: string | null;
   gemini_session_id: string | null;
   transcript_path: string | null;
@@ -26,11 +28,13 @@ type RawSessionRow = {
   updated_at: string;
   last_activity_at: string | null;
   last_run_id: string | null;
+  last_prompt: string | null;
 };
 
 type RawRunRow = {
   id: string;
   session_id: string;
+  model: string | null;
   status: RunStatus;
   prompt: string;
   started_at: string;
@@ -47,6 +51,20 @@ type RawWorkspaceRow = {
   root_path: string;
   provider: WorkspaceConfig['provider'];
   last_repaired_at: string | null;
+};
+
+type RawArtifactRow = {
+  id: string;
+  session_id: string;
+  run_id: string;
+  workspace_id: string;
+  source_path: string;
+  stored_path: string;
+  filename: string;
+  media_type: string;
+  size_bytes: number;
+  sha256: string;
+  created_at: string;
 };
 
 export class AppDatabase {
@@ -83,6 +101,7 @@ export class AppDatabase {
       CREATE TABLE IF NOT EXISTS sessions (
         id TEXT PRIMARY KEY,
         workspace_id TEXT NOT NULL,
+        model TEXT,
         provider_session_id TEXT,
         gemini_session_id TEXT,
         transcript_path TEXT,
@@ -99,6 +118,7 @@ export class AppDatabase {
       CREATE TABLE IF NOT EXISTS runs (
         id TEXT PRIMARY KEY,
         session_id TEXT NOT NULL,
+        model TEXT,
         status TEXT NOT NULL,
         prompt TEXT NOT NULL,
         started_at TEXT NOT NULL,
@@ -128,11 +148,33 @@ export class AppDatabase {
 
       CREATE INDEX IF NOT EXISTS idx_events_session
       ON session_events(session_id, seq ASC);
+
+      CREATE TABLE IF NOT EXISTS session_artifacts (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        workspace_id TEXT NOT NULL,
+        source_path TEXT NOT NULL,
+        stored_path TEXT NOT NULL,
+        filename TEXT NOT NULL,
+        media_type TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL,
+        sha256 TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(session_id) REFERENCES sessions(id),
+        FOREIGN KEY(run_id) REFERENCES runs(id),
+        FOREIGN KEY(workspace_id) REFERENCES workspaces(id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_artifacts_session
+      ON session_artifacts(session_id, created_at DESC);
     `);
 
     this.ensureColumn('workspaces', 'provider', `TEXT NOT NULL DEFAULT 'gemini'`);
     this.ensureColumn('workspaces', 'last_repaired_at', 'TEXT');
+    this.ensureColumn('sessions', 'model', 'TEXT');
     this.ensureColumn('sessions', 'provider_session_id', 'TEXT');
+    this.ensureColumn('runs', 'model', 'TEXT');
   }
 
   private ensureColumn(
@@ -297,15 +339,19 @@ export class AppDatabase {
     return true;
   }
 
-  createSession(id: string, workspaceId: string): SessionRecord {
+  createSession(
+    id: string,
+    workspaceId: string,
+    model: string | null = null,
+  ): SessionRecord {
     const now = nowIso();
     this.db
       .prepare(
         `INSERT INTO sessions
-        (id, workspace_id, provider_session_id, gemini_session_id, transcript_path, status, created_at, updated_at, last_run_id)
-        VALUES (?, ?, NULL, NULL, NULL, ?, ?, ?, NULL)`,
+        (id, workspace_id, model, provider_session_id, gemini_session_id, transcript_path, status, created_at, updated_at, last_run_id)
+        VALUES (?, ?, ?, NULL, NULL, NULL, ?, ?, ?, NULL)`,
       )
-      .run(id, workspaceId, 'idle', now, now);
+      .run(id, workspaceId, model, 'idle', now, now);
 
     return this.getSessionOrThrow(id);
   }
@@ -351,7 +397,7 @@ export class AppDatabase {
   listRuns(sessionId: string): RunRecord[] {
     const rows = this.db
       .prepare<[string], RawRunRow>(
-        `SELECT id, session_id, status, prompt, started_at, ended_at, exit_code, cancelled_by_user, stdout_tail, stderr_tail
+        `SELECT id, session_id, model, status, prompt, started_at, ended_at, exit_code, cancelled_by_user, stdout_tail, stderr_tail
          FROM runs
          WHERE session_id = ?
          ORDER BY started_at DESC, rowid DESC`,
@@ -359,6 +405,83 @@ export class AppDatabase {
       .all(sessionId);
 
     return rows.map(mapRun);
+  }
+
+  createArtifact(record: ArtifactRecord): ArtifactRecord {
+    this.db
+      .prepare(
+        `INSERT INTO session_artifacts
+        (id, session_id, run_id, workspace_id, source_path, stored_path, filename, media_type, size_bytes, sha256, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        record.id,
+        record.sessionId,
+        record.runId,
+        record.workspaceId,
+        record.sourcePath,
+        record.storedPath,
+        record.filename,
+        record.mediaType,
+        record.sizeBytes,
+        record.sha256,
+        record.createdAt,
+      );
+
+    return this.getArtifactOrThrow(record.id);
+  }
+
+  getArtifact(id: string): ArtifactRecord | null {
+    const row = this.db
+      .prepare<[string], RawArtifactRow>(
+        `SELECT id, session_id, run_id, workspace_id, source_path, stored_path, filename, media_type, size_bytes, sha256, created_at
+         FROM session_artifacts
+         WHERE id = ?`,
+      )
+      .get(id);
+
+    return row ? mapArtifact(row) : null;
+  }
+
+  getArtifactOrThrow(id: string): ArtifactRecord {
+    const artifact = this.getArtifact(id);
+    if (!artifact) {
+      throw new Error(`Artifact not found: ${id}`);
+    }
+    return artifact;
+  }
+
+  listArtifacts(sessionId: string): ArtifactRecord[] {
+    const rows = this.db
+      .prepare<[string], RawArtifactRow>(
+        `SELECT id, session_id, run_id, workspace_id, source_path, stored_path, filename, media_type, size_bytes, sha256, created_at
+         FROM session_artifacts
+         WHERE session_id = ?
+         ORDER BY created_at DESC, rowid DESC`,
+      )
+      .all(sessionId);
+
+    return rows.map(mapArtifact);
+  }
+
+  deleteSession(sessionId: string): ArtifactRecord[] {
+    const artifacts = this.listArtifacts(sessionId);
+    const tx = this.db.transaction(() => {
+      this.db
+        .prepare('DELETE FROM session_events WHERE session_id = ?')
+        .run(sessionId);
+      this.db
+        .prepare('DELETE FROM session_artifacts WHERE session_id = ?')
+        .run(sessionId);
+      this.db
+        .prepare('DELETE FROM runs WHERE session_id = ?')
+        .run(sessionId);
+      this.db
+        .prepare('DELETE FROM sessions WHERE id = ?')
+        .run(sessionId);
+    });
+    tx();
+    return artifacts;
   }
 
   recoverOrphanedRuns(reason: string): Array<{
@@ -435,22 +558,27 @@ export class AppDatabase {
     return recovered;
   }
 
-  createRun(id: string, sessionId: string, prompt: string): RunRecord {
+  createRun(
+    id: string,
+    sessionId: string,
+    prompt: string,
+    model: string | null = null,
+  ): RunRecord {
     const now = nowIso();
     const tx = this.db.transaction(() => {
       this.db
         .prepare(
           `INSERT INTO runs
-          (id, session_id, status, prompt, started_at, ended_at, exit_code, cancelled_by_user, stdout_tail, stderr_tail)
-          VALUES (?, ?, ?, ?, ?, NULL, NULL, 0, '', '')`,
+          (id, session_id, model, status, prompt, started_at, ended_at, exit_code, cancelled_by_user, stdout_tail, stderr_tail)
+          VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, 0, '', '')`,
         )
-        .run(id, sessionId, 'running', prompt, now);
+        .run(id, sessionId, model, 'running', prompt, now);
 
       this.db
         .prepare(
-          'UPDATE sessions SET status = ?, updated_at = ?, last_run_id = ? WHERE id = ?',
+          'UPDATE sessions SET model = ?, status = ?, updated_at = ?, last_run_id = ? WHERE id = ?',
         )
-        .run('running', now, id, sessionId);
+        .run(model, 'running', now, id, sessionId);
     });
 
     tx();
@@ -460,7 +588,7 @@ export class AppDatabase {
   getRunOrThrow(id: string): RunRecord {
     const row = this.db
       .prepare<[string], RawRunRow>(
-        `SELECT id, session_id, status, prompt, started_at, ended_at, exit_code, cancelled_by_user, stdout_tail, stderr_tail
+        `SELECT id, session_id, model, status, prompt, started_at, ended_at, exit_code, cancelled_by_user, stdout_tail, stderr_tail
          FROM runs WHERE id = ?`,
       )
       .get(id);
@@ -475,18 +603,12 @@ export class AppDatabase {
   getRun(id: string): RunRecord | null {
     const row = this.db
       .prepare<[string], RawRunRow>(
-        `SELECT id, session_id, status, prompt, started_at, ended_at, exit_code, cancelled_by_user, stdout_tail, stderr_tail
+        `SELECT id, session_id, model, status, prompt, started_at, ended_at, exit_code, cancelled_by_user, stdout_tail, stderr_tail
          FROM runs WHERE id = ?`,
       )
       .get(id);
 
     return row ? mapRun(row) : null;
-  }
-
-  markRunCancelRequested(runId: string): void {
-    this.db
-      .prepare('UPDATE runs SET cancelled_by_user = 1 WHERE id = ?')
-      .run(runId);
   }
 
   finishRun(
@@ -496,22 +618,25 @@ export class AppDatabase {
       exitCode: number | null;
       stdoutTail: string;
       stderrTail: string;
+      cancelledByUser?: boolean;
     },
   ): RunRecord {
     const run = this.getRunOrThrow(runId);
     const now = nowIso();
+    const cancelledByUser = input.cancelledByUser ?? run.cancelledByUser;
 
     const tx = this.db.transaction(() => {
       this.db
         .prepare(
           `UPDATE runs
-           SET status = ?, ended_at = ?, exit_code = ?, stdout_tail = ?, stderr_tail = ?
+           SET status = ?, ended_at = ?, exit_code = ?, cancelled_by_user = ?, stdout_tail = ?, stderr_tail = ?
            WHERE id = ?`,
         )
         .run(
           input.status,
           now,
           input.exitCode,
+          cancelledByUser ? 1 : 0,
           input.stdoutTail,
           input.stderrTail,
           runId,
@@ -538,6 +663,7 @@ export class AppDatabase {
   updateSessionMetadata(
     sessionId: string,
     input: {
+      model?: string | null;
       providerSessionId?: string | null;
       geminiSessionId?: string | null;
       transcriptPath?: string | null;
@@ -546,6 +672,8 @@ export class AppDatabase {
   ): SessionRecord {
     const session = this.getSessionOrThrow(sessionId);
     const next = {
+      model:
+        input.model === undefined ? session.model : input.model,
       providerSessionId:
         input.providerSessionId === undefined
           ? session.providerSessionId
@@ -565,10 +693,11 @@ export class AppDatabase {
     this.db
       .prepare(
         `UPDATE sessions
-         SET provider_session_id = ?, gemini_session_id = ?, transcript_path = ?, status = ?, updated_at = ?
+         SET model = ?, provider_session_id = ?, gemini_session_id = ?, transcript_path = ?, status = ?, updated_at = ?
          WHERE id = ?`,
       )
       .run(
+        next.model,
         next.providerSessionId,
         next.geminiSessionId,
         next.transcriptPath,
@@ -686,6 +815,7 @@ function mapSession(row: RawSessionRow): SessionRecord {
   return {
     id: row.id,
     workspaceId: row.workspace_id,
+    model: row.model,
     providerSessionId: row.provider_session_id ?? row.gemini_session_id,
     geminiSessionId: row.gemini_session_id,
     transcriptPath: row.transcript_path,
@@ -695,6 +825,23 @@ function mapSession(row: RawSessionRow): SessionRecord {
     updatedAt: row.updated_at,
     lastActivityAt: row.last_activity_at ?? row.updated_at,
     lastRunId: row.last_run_id,
+    lastPrompt: row.last_prompt,
+  };
+}
+
+function mapArtifact(row: RawArtifactRow): ArtifactRecord {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    runId: row.run_id,
+    workspaceId: row.workspace_id,
+    sourcePath: row.source_path,
+    storedPath: row.stored_path,
+    filename: row.filename,
+    mediaType: row.media_type,
+    sizeBytes: row.size_bytes,
+    sha256: row.sha256,
+    createdAt: row.created_at,
   };
 }
 
@@ -702,40 +849,41 @@ const sessionSelectSql = `
   SELECT
     id,
     workspace_id,
+    model,
     provider_session_id,
     gemini_session_id,
     transcript_path,
     status,
-    COALESCE(
-      (
-        SELECT CASE
-          WHEN type = 'run.started' THEN 'running'
-          WHEN type = 'run.failed' THEN 'failed'
-          WHEN type = 'run.cancelled' THEN 'cancelled'
-          WHEN type = 'run.completed' THEN 'completed'
-          WHEN type = 'message.completed' THEN 'completed'
-          ELSE NULL
+    CASE
+      WHEN status = 'running' THEN 'running'
+      WHEN status = 'failed' THEN 'failed'
+      WHEN status = 'cancelled' THEN 'cancelled'
+      ELSE COALESCE(
+        (
+          SELECT CASE
+            WHEN type = 'run.failed' THEN 'failed'
+            WHEN type = 'run.cancelled' THEN 'cancelled'
+            WHEN type = 'run.completed' THEN 'completed'
+            WHEN type = 'message.completed' THEN 'completed'
+            ELSE NULL
+          END
+          FROM session_events
+          WHERE session_id = sessions.id
+            AND type IN (
+              'run.failed',
+              'run.cancelled',
+              'run.completed',
+              'message.completed'
+            )
+          ORDER BY seq DESC
+          LIMIT 1
+        ),
+        CASE
+          WHEN last_run_id IS NULL THEN 'idle'
+          ELSE 'completed'
         END
-        FROM session_events
-        WHERE session_id = sessions.id
-          AND type IN (
-            'run.started',
-            'run.failed',
-            'run.cancelled',
-            'run.completed',
-            'message.completed'
-          )
-        ORDER BY seq DESC
-        LIMIT 1
-      ),
-      CASE
-        WHEN status = 'running' THEN 'running'
-        WHEN status = 'failed' THEN 'failed'
-        WHEN status = 'cancelled' THEN 'cancelled'
-        WHEN last_run_id IS NULL THEN 'idle'
-        ELSE 'completed'
-      END
-    ) AS last_message_status,
+      )
+    END AS last_message_status,
     created_at,
     updated_at,
     COALESCE(
@@ -748,7 +896,13 @@ const sessionSelectSql = `
       ),
       updated_at
     ) AS last_activity_at,
-    last_run_id
+    last_run_id,
+    (
+      SELECT prompt
+      FROM runs
+      WHERE id = sessions.last_run_id
+      LIMIT 1
+    ) AS last_prompt
 `;
 
 function inferMessageStatus(status: SessionStatus): RunStatus | 'idle' {
@@ -769,6 +923,7 @@ function mapRun(row: RawRunRow): RunRecord {
   return {
     id: row.id,
     sessionId: row.session_id,
+    model: row.model,
     status: row.status,
     prompt: row.prompt,
     startedAt: row.started_at,

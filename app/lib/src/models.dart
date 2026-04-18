@@ -1,3 +1,5 @@
+import 'base_url.dart';
+
 enum ConnectionStatus { disconnected, connecting, connected }
 
 class AuthSession {
@@ -9,12 +11,12 @@ class AuthSession {
   Uri get httpUri => Uri.parse(baseUrl);
 
   Uri get websocketUri {
-    final http = httpUri;
-    return http.replace(
-      scheme: http.scheme == 'https' ? 'wss' : 'ws',
-      path: '/ws',
+    final websocket = resolveBaseUrlPath(
+      baseUrl,
+      '/ws',
       queryParameters: {'token': token},
     );
+    return websocket.replace(scheme: httpUri.scheme == 'https' ? 'wss' : 'ws');
   }
 }
 
@@ -98,10 +100,21 @@ class DirectoryListing {
   final List<DirectoryEntry> directories;
 }
 
+class ProviderModelOption {
+  const ProviderModelOption({required this.value, required this.label});
+
+  final String value;
+  final String label;
+}
+
+const String defaultProviderModelValue = '__default__';
+const String customProviderModelValue = '__custom__';
+
 class RemoteSession {
   const RemoteSession({
     required this.id,
     required this.workspaceId,
+    required this.model,
     required this.providerSessionId,
     required this.geminiSessionId,
     required this.transcriptPath,
@@ -111,12 +124,14 @@ class RemoteSession {
     required this.updatedAt,
     required this.lastActivityAt,
     required this.lastRunId,
+    this.lastPrompt,
   });
 
   factory RemoteSession.fromJson(Map<String, dynamic> json) {
     return RemoteSession(
       id: json['id'] as String,
       workspaceId: json['workspaceId'] as String,
+      model: json['model'] as String?,
       providerSessionId:
           (json['providerSessionId'] as String?) ??
           (json['geminiSessionId'] as String?),
@@ -130,11 +145,13 @@ class RemoteSession {
           _parseDateTime(json['lastActivityAt']) ??
           DateTime.parse(json['updatedAt'] as String).toLocal(),
       lastRunId: json['lastRunId'] as String?,
+      lastPrompt: json['lastPrompt'] as String?,
     );
   }
 
   final String id;
   final String workspaceId;
+  final String? model;
   final String? providerSessionId;
   final String? geminiSessionId;
   final String? transcriptPath;
@@ -144,11 +161,13 @@ class RemoteSession {
   final DateTime updatedAt;
   final DateTime lastActivityAt;
   final String? lastRunId;
+  final String? lastPrompt;
 
   Map<String, dynamic> toJson() {
     return {
       'id': id,
       'workspaceId': workspaceId,
+      'model': model,
       'providerSessionId': providerSessionId,
       'geminiSessionId': geminiSessionId,
       'transcriptPath': transcriptPath,
@@ -158,6 +177,7 @@ class RemoteSession {
       'updatedAt': updatedAt.toUtc().toIso8601String(),
       'lastActivityAt': lastActivityAt.toUtc().toIso8601String(),
       'lastRunId': lastRunId,
+      'lastPrompt': lastPrompt,
     };
   }
 }
@@ -166,6 +186,7 @@ class RunRecord {
   const RunRecord({
     required this.id,
     required this.sessionId,
+    required this.model,
     required this.status,
     required this.prompt,
     required this.startedAt,
@@ -180,6 +201,7 @@ class RunRecord {
     return RunRecord(
       id: json['id'] as String,
       sessionId: json['sessionId'] as String,
+      model: json['model'] as String?,
       status: json['status'] as String,
       prompt: json['prompt'] as String? ?? '',
       startedAt: _parseDateTime(json['startedAt']) ?? DateTime.now(),
@@ -193,6 +215,7 @@ class RunRecord {
 
   final String id;
   final String sessionId;
+  final String? model;
   final String status;
   final String prompt;
   final DateTime startedAt;
@@ -206,6 +229,7 @@ class RunRecord {
     return {
       'id': id,
       'sessionId': sessionId,
+      'model': model,
       'status': status,
       'prompt': prompt,
       'startedAt': startedAt.toUtc().toIso8601String(),
@@ -348,6 +372,87 @@ String providerSessionLabel(String provider) {
     default:
       return 'Session id';
   }
+}
+
+String modelDisplayLabel(String? model) {
+  final trimmed = model?.trim();
+  if (trimmed == null || trimmed.isEmpty) {
+    return 'Default';
+  }
+
+  return trimmed;
+}
+
+String providerModelHelperText(String provider) {
+  return 'Choose a preset, or switch to Custom to enter any ${providerDisplayName(provider)} model id supported by your local CLI.';
+}
+
+List<ProviderModelOption> providerModelOptions(String provider) {
+  switch (provider) {
+    case 'codex':
+      return const [
+        ProviderModelOption(value: 'gpt-5.4', label: 'GPT-5.4'),
+        ProviderModelOption(value: 'gpt-5.4-mini', label: 'GPT-5.4 Mini'),
+        ProviderModelOption(value: 'gpt-5.3-codex', label: 'GPT-5.3-Codex'),
+        ProviderModelOption(value: 'gpt-5.2-codex', label: 'GPT-5.2-Codex'),
+        ProviderModelOption(
+          value: 'gpt-5.1-codex-max',
+          label: 'GPT-5.1 Codex Max',
+        ),
+        ProviderModelOption(value: 'gpt-5.1-codex', label: 'GPT-5.1 Codex'),
+        ProviderModelOption(
+          value: 'gpt-5.1-codex-mini',
+          label: 'GPT-5.1 Codex Mini',
+        ),
+        ProviderModelOption(
+          value: 'gpt-5-codex',
+          label: 'GPT-5 Codex (Legacy)',
+        ),
+      ];
+    case 'gemini':
+    default:
+      return const [
+        ProviderModelOption(
+          value: 'gemini-3.1-pro-preview',
+          label: 'Gemini 3.1 Pro Preview',
+        ),
+        ProviderModelOption(
+          value: 'gemini-3.1-pro-preview-customtools',
+          label: 'Gemini 3.1 Pro Preview Custom Tools',
+        ),
+        ProviderModelOption(
+          value: 'gemini-3-flash-preview',
+          label: 'Gemini 3 Flash Preview',
+        ),
+        ProviderModelOption(
+          value: 'gemini-3.1-flash-lite-preview',
+          label: 'Gemini 3.1 Flash-Lite Preview',
+        ),
+        ProviderModelOption(value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro'),
+        ProviderModelOption(
+          value: 'gemini-2.5-flash',
+          label: 'Gemini 2.5 Flash',
+        ),
+        ProviderModelOption(
+          value: 'gemini-2.5-flash-lite',
+          label: 'Gemini 2.5 Flash-Lite',
+        ),
+        ProviderModelOption(
+          value: 'gemini-2.0-flash',
+          label: 'Gemini 2.0 Flash (Legacy)',
+        ),
+        ProviderModelOption(
+          value: 'gemini-2.0-flash-lite',
+          label: 'Gemini 2.0 Flash-Lite (Legacy)',
+        ),
+      ];
+  }
+}
+
+bool isKnownProviderModel(String provider, String model) {
+  return providerModelOptions(
+    provider,
+  ).any((option) => option.value == model.trim());
 }
 
 String messageStatusLabel(String status) {

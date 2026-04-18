@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../theme.dart';
+
 Future<void> showJsonExportSheet({
   required BuildContext context,
   required String title,
@@ -66,9 +68,9 @@ class _JsonExportSheet extends StatelessWidget {
               Expanded(
                 child: DecoratedBox(
                   decoration: BoxDecoration(
-                    color: const Color(0xFFFFFBF7),
+                    color: AppPalette.surfaceSoft,
                     borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: const Color(0xFFE5D7C8)),
+                    border: Border.all(color: AppPalette.outline),
                   ),
                   child: Scrollbar(
                     child: SingleChildScrollView(

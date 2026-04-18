@@ -2,13 +2,16 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models.dart';
 import '../state/app_state.dart';
+import '../theme.dart';
 import '../widgets/chrome.dart';
 import '../widgets/json_export_sheet.dart';
+import 'session_artifacts_screen.dart';
 
 class SessionDetailScreen extends ConsumerStatefulWidget {
   const SessionDetailScreen({
@@ -26,21 +29,30 @@ class SessionDetailScreen extends ConsumerStatefulWidget {
 }
 
 class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
+  static const double _bottomScrollThreshold = 32;
   final List<SessionEvent> _events = [];
+  final ScrollController _conversationScrollController = ScrollController();
   late final TextEditingController _promptController;
+  String? _selectedModel;
+  bool _modelSelectionTouched = false;
   StreamSubscription<RealtimeEnvelope>? _messageSubscription;
   StreamSubscription<ConnectionStatus>? _statusSubscription;
   bool _loading = true;
   bool _sending = false;
   bool _exporting = false;
+  bool _deleting = false;
+  bool _stickConversationToBottom = true;
   String? _error;
   int _lastSeq = 0;
+  int _scrollRequestNonce = 0;
   ConnectionStatus _connectionStatus = ConnectionStatus.disconnected;
 
   @override
   void initState() {
     super.initState();
     _promptController = TextEditingController();
+    _selectedModel = widget.session.model;
+    _conversationScrollController.addListener(_handleConversationScroll);
     final realtime = ref.read(realtimeServiceProvider);
     _connectionStatus = realtime.status;
     _messageSubscription = realtime.messages.listen(_handleRealtimeEvent);
@@ -57,25 +69,39 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
         await _fetchEvents(afterSeq: _lastSeq);
       }
     });
-    unawaited(_fetchEvents(afterSeq: 0));
+    unawaited(_fetchEvents(afterSeq: 0, forceScrollToBottom: true));
   }
 
   @override
   void dispose() {
     _messageSubscription?.cancel();
     _statusSubscription?.cancel();
+    _conversationScrollController.dispose();
     _promptController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final sessionSummary = ref
+        .watch(sessionsProvider(widget.workspace.id))
+        .maybeWhen(
+          data: (items) => _findSessionSummary(items) ?? widget.session,
+          orElse: () => widget.session,
+        );
     final liveText = _liveText();
     final entries = _conversationEntries(liveText);
     final isRunning = _isRunning();
-    final messageStatus = _currentMessageStatus();
+    final messageStatus = _currentMessageStatus(
+      isRunning: isRunning,
+      sessionSummary: sessionSummary,
+    );
+    final canDelete = _isSessionDeletable(messageStatus);
     final messageStatusTone = statusColor(messageStatus);
-    final lastActivityAt = _latestActivityAt();
+    final lastActivityAt = _latestActivityAt(sessionSummary);
+    final currentModel = _modelSelectionTouched
+        ? _selectedModel
+        : sessionSummary.model;
 
     return AtmosphereScaffold(
       title: 'Session',
@@ -123,6 +149,10 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
                               _formatTime(lastActivityAt),
                               style: Theme.of(context).textTheme.bodySmall,
                             ),
+                            Text(
+                              'Model ${modelDisplayLabel(currentModel)}',
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
                           ],
                         ),
                       ],
@@ -131,7 +161,7 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
                   const SizedBox(width: 6),
                   PopupMenuButton<_SessionDetailAction>(
                     tooltip: 'Conversation actions',
-                    icon: _exporting
+                    icon: _exporting || _deleting
                         ? const SizedBox(
                             height: 18,
                             width: 18,
@@ -139,24 +169,44 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
                           )
                         : const Icon(Icons.more_vert_rounded),
                     onSelected: (action) {
-                      if (_exporting) {
+                      if (_exporting || _deleting) {
                         return;
                       }
-                      if (action == _SessionDetailAction.downloadCurrent) {
+                      if (action == _SessionDetailAction.sessionExport) {
                         _showExport();
+                      } else if (action == _SessionDetailAction.artifacts) {
+                        Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => SessionArtifactsScreen(
+                              workspace: widget.workspace,
+                              session: widget.session,
+                            ),
+                          ),
+                        );
                       } else if (action == _SessionDetailAction.refresh) {
                         _refreshConversation();
+                      } else if (action == _SessionDetailAction.deleteSession) {
+                        _confirmDeleteSession();
                       }
                     },
                     itemBuilder: (context) => [
                       const PopupMenuItem<_SessionDetailAction>(
-                        value: _SessionDetailAction.downloadCurrent,
-                        child: Text('Download Screen (current)'),
+                        value: _SessionDetailAction.artifacts,
+                        child: Text('Artifacts'),
+                      ),
+                      const PopupMenuItem<_SessionDetailAction>(
+                        value: _SessionDetailAction.sessionExport,
+                        child: Text('Session export'),
                       ),
                       const PopupMenuItem<_SessionDetailAction>(
                         value: _SessionDetailAction.refresh,
                         child: Text('Refresh'),
                       ),
+                      if (canDelete)
+                        const PopupMenuItem<_SessionDetailAction>(
+                          value: _SessionDetailAction.deleteSession,
+                          child: Text('Delete session'),
+                        ),
                     ],
                   ),
                 ],
@@ -170,62 +220,78 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
               padding: const EdgeInsets.fromLTRB(10, 6, 10, 10),
               child: SectionCard(
                 padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  spacing: 8,
                   children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _promptController,
-                        minLines: 1,
-                        maxLines: 4,
-                        textInputAction: TextInputAction.send,
-                        onSubmitted: (_) {
-                          if (!_sending && !isRunning) {
-                            _sendPrompt();
-                          }
-                        },
-                        decoration: const InputDecoration(
-                          hintText: 'Send a follow-up prompt',
-                          isDense: true,
-                          contentPadding: EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 10,
-                          ),
-                        ),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: ActionChip(
+                        avatar: const Icon(Icons.tune_rounded, size: 18),
+                        label: Text('Model ${modelDisplayLabel(currentModel)}'),
+                        onPressed: isRunning ? null : () => _editModel(),
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    FilledButton(
-                      onPressed: _sending || isRunning ? null : _sendPrompt,
-                      style: FilledButton.styleFrom(
-                        minimumSize: const Size(0, 42),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 10,
-                        ),
-                      ),
-                      child: _sending
-                          ? const SizedBox(
-                              height: 18,
-                              width: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.send_rounded),
-                    ),
-                    if (isRunning) ...[
-                      const SizedBox(width: 6),
-                      OutlinedButton(
-                        onPressed: _cancelSession,
-                        style: OutlinedButton.styleFrom(
-                          minimumSize: const Size(0, 42),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 10,
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _promptController,
+                            minLines: 1,
+                            maxLines: 4,
+                            textInputAction: TextInputAction.send,
+                            onSubmitted: (_) {
+                              if (!_sending && !isRunning) {
+                                _sendPrompt();
+                              }
+                            },
+                            decoration: const InputDecoration(
+                              hintText: 'Send a follow-up prompt',
+                              isDense: true,
+                              contentPadding: EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 10,
+                              ),
+                            ),
                           ),
                         ),
-                        child: const Icon(Icons.stop_circle_outlined),
-                      ),
-                    ],
+                        const SizedBox(width: 8),
+                        FilledButton(
+                          onPressed: _sending || isRunning ? null : _sendPrompt,
+                          style: FilledButton.styleFrom(
+                            minimumSize: const Size(0, 42),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 10,
+                            ),
+                          ),
+                          child: _sending
+                              ? const SizedBox(
+                                  height: 18,
+                                  width: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.send_rounded),
+                        ),
+                        if (isRunning) ...[
+                          const SizedBox(width: 6),
+                          OutlinedButton(
+                            onPressed: _cancelSession,
+                            style: OutlinedButton.styleFrom(
+                              minimumSize: const Size(0, 42),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 10,
+                              ),
+                            ),
+                            child: const Icon(Icons.stop_circle_outlined),
+                          ),
+                        ],
+                      ],
+                    ),
                   ],
                 ),
               ),
@@ -246,6 +312,8 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
 
     if (_error != null) {
       return ListView(
+        key: const ValueKey('session-conversation-list'),
+        controller: _conversationScrollController,
         padding: const EdgeInsets.all(10),
         children: [
           EmptyStateCard(title: 'Could not load conversation', body: _error!),
@@ -255,6 +323,8 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
 
     if (entries.isEmpty) {
       return ListView(
+        key: const ValueKey('session-conversation-list'),
+        controller: _conversationScrollController,
         padding: const EdgeInsets.all(10),
         children: const [
           EmptyStateCard(
@@ -267,6 +337,8 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
     }
 
     return ListView.separated(
+      key: const ValueKey('session-conversation-list'),
+      controller: _conversationScrollController,
       padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
       itemCount: entries.length,
       separatorBuilder: (_, _) => const SizedBox(height: 6),
@@ -276,16 +348,17 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
           _TranscriptEntryKind.user => _MessageBubble(
             entry: entry,
             alignment: Alignment.centerRight,
-            backgroundColor: const Color(0xFFE36A39),
-            foregroundColor: Colors.white,
+            backgroundColor: AppPalette.brandBlue,
+            foregroundColor: AppPalette.ink,
             renderMarkdown: false,
           ),
           _TranscriptEntryKind.assistant => _MessageBubble(
             entry: entry,
             alignment: Alignment.centerLeft,
-            backgroundColor: Colors.white,
-            foregroundColor: const Color(0xFF2E2B27),
+            backgroundColor: AppPalette.surface,
+            foregroundColor: AppPalette.ink,
             renderMarkdown: !entry.isLive,
+            onLongPress: () => _copyAssistantMessage(entry.text ?? ''),
           ),
           _TranscriptEntryKind.tool => _ToolCallCard(
             key: ValueKey(
@@ -429,11 +502,26 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
     return entries;
   }
 
-  String _currentMessageStatus() {
+  RemoteSession? _findSessionSummary(List<RemoteSession> sessions) {
+    for (final session in sessions) {
+      if (session.id == widget.session.id) {
+        return session;
+      }
+    }
+    return null;
+  }
+
+  String _currentMessageStatus({
+    required bool isRunning,
+    required RemoteSession sessionSummary,
+  }) {
+    if (isRunning) {
+      return 'running';
+    }
+
     for (final event in _events.reversed) {
       switch (event.type) {
         case 'message.delta':
-        case 'run.started':
           return 'running';
         case 'run.completed':
         case 'message.completed':
@@ -446,14 +534,18 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
           break;
       }
     }
-    return widget.session.lastMessageStatus;
+    return sessionSummary.lastMessageStatus;
   }
 
-  DateTime _latestActivityAt() {
+  DateTime _latestActivityAt(RemoteSession sessionSummary) {
     if (_events.isNotEmpty) {
       return _events.last.ts;
     }
-    return widget.session.lastActivityAt;
+    return sessionSummary.lastActivityAt;
+  }
+
+  bool _isSessionDeletable(String messageStatus) {
+    return messageStatus == 'completed' || messageStatus == 'cancelled';
   }
 
   Future<void> _showExport() async {
@@ -495,10 +587,13 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
   }
 
   Future<void> _refreshConversation() async {
-    await _fetchEvents(afterSeq: _lastSeq);
+    await _fetchEvents(afterSeq: _lastSeq, forceScrollToBottom: true);
   }
 
-  Future<void> _fetchEvents({required int afterSeq}) async {
+  Future<void> _fetchEvents({
+    required int afterSeq,
+    bool forceScrollToBottom = false,
+  }) async {
     final api = ref.read(apiClientProvider);
     if (api == null) {
       return;
@@ -512,11 +607,17 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
       if (!mounted) {
         return;
       }
+      final shouldAutoScroll =
+          forceScrollToBottom || _shouldKeepConversationPinnedToBottom();
       setState(() {
         _loading = false;
         _error = null;
         _mergeEvents(events);
       });
+      if (shouldAutoScroll) {
+        _stickConversationToBottom = true;
+        _scheduleScrollToConversationBottom(force: forceScrollToBottom);
+      }
       if (events.any((event) => _eventAffectsSessionSummary(event.type))) {
         ref.invalidate(sessionsProvider(widget.workspace.id));
       }
@@ -536,12 +637,21 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
       return;
     }
 
+    final shouldAutoScroll = _shouldKeepConversationPinnedToBottom();
     setState(() {
       _mergeEvents([envelope.event]);
     });
+    if (shouldAutoScroll) {
+      _stickConversationToBottom = true;
+      _scheduleScrollToConversationBottom();
+    }
     if (_eventAffectsSessionSummary(envelope.event.type)) {
       ref.invalidate(sessionsProvider(widget.workspace.id));
     }
+  }
+
+  void _handleConversationScroll() {
+    _stickConversationToBottom = _isNearConversationBottom();
   }
 
   void _mergeEvents(List<SessionEvent> incoming) {
@@ -555,6 +665,63 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
     if (_events.isNotEmpty) {
       _lastSeq = _events.last.seq;
     }
+  }
+
+  bool _shouldKeepConversationPinnedToBottom() {
+    return _stickConversationToBottom || _isNearConversationBottom();
+  }
+
+  bool _isNearConversationBottom() {
+    if (!_conversationScrollController.hasClients) {
+      return true;
+    }
+    final position = _conversationScrollController.position;
+    if (!position.hasContentDimensions) {
+      return true;
+    }
+    return position.maxScrollExtent - position.pixels <= _bottomScrollThreshold;
+  }
+
+  void _scheduleScrollToConversationBottom({bool force = false}) {
+    if (force) {
+      _stickConversationToBottom = true;
+    }
+    final requestNonce = ++_scrollRequestNonce;
+    _queueScrollToConversationBottom(
+      force: force,
+      requestNonce: requestNonce,
+      attemptsRemaining: force ? 6 : 4,
+    );
+  }
+
+  void _queueScrollToConversationBottom({
+    required bool force,
+    required int requestNonce,
+    required int attemptsRemaining,
+  }) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || requestNonce != _scrollRequestNonce) {
+        return;
+      }
+      if (!force && !_stickConversationToBottom) {
+        return;
+      }
+      if (_conversationScrollController.hasClients) {
+        final position = _conversationScrollController.position;
+        if (position.hasContentDimensions) {
+          _conversationScrollController.jumpTo(position.maxScrollExtent);
+        }
+      }
+      if (attemptsRemaining <= 1) {
+        return;
+      }
+      _queueScrollToConversationBottom(
+        force: force,
+        requestNonce: requestNonce,
+        attemptsRemaining: attemptsRemaining - 1,
+      );
+      WidgetsBinding.instance.scheduleFrame();
+    });
   }
 
   bool _isRunning() {
@@ -629,6 +796,7 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
     }
 
     final api = ref.read(apiClientProvider);
+    final auth = ref.read(authControllerProvider).valueOrNull;
     if (api == null) {
       return;
     }
@@ -638,7 +806,18 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
     });
 
     try {
-      await api.sendPrompt(sessionId: widget.session.id, prompt: prompt);
+      await api.sendPrompt(
+        sessionId: widget.session.id,
+        prompt: prompt,
+        model: _selectedModel,
+      );
+      if (auth != null) {
+        unawaited(
+          ref
+              .read(sessionMonitorBridgeProvider)
+              .start(auth, sessionIds: [widget.session.id]),
+        );
+      }
       _promptController.clear();
       await _fetchEvents(afterSeq: _lastSeq);
     } catch (error) {
@@ -654,6 +833,120 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
         });
       }
     }
+  }
+
+  Future<void> _editModel() async {
+    final modelOptions = providerModelOptions(widget.workspace.provider);
+    var selectedModelValue = _dropdownValueForModel(
+      widget.workspace.provider,
+      _selectedModel,
+    );
+    final controller = TextEditingController(
+      text: selectedModelValue == customProviderModelValue
+          ? (_selectedModel ?? '')
+          : '',
+    );
+    final next = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            final showCustomModel =
+                selectedModelValue == customProviderModelValue;
+            return Padding(
+              padding: EdgeInsets.only(
+                left: 14,
+                right: 14,
+                top: 14,
+                bottom: 14 + MediaQuery.viewInsetsOf(context).bottom,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                spacing: 10,
+                children: [
+                  Text(
+                    'Choose ${providerDisplayName(widget.workspace.provider)} model',
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  DropdownButtonFormField<String>(
+                    key: ValueKey('detail-model-$selectedModelValue'),
+                    initialValue: selectedModelValue,
+                    isExpanded: true,
+                    decoration: const InputDecoration(labelText: 'Model'),
+                    items: [
+                      const DropdownMenuItem<String>(
+                        value: defaultProviderModelValue,
+                        child: Text('Use provider default'),
+                      ),
+                      ...modelOptions.map(
+                        (option) => DropdownMenuItem<String>(
+                          value: option.value,
+                          child: Text(option.label),
+                        ),
+                      ),
+                      const DropdownMenuItem<String>(
+                        value: customProviderModelValue,
+                        child: Text('Custom model id'),
+                      ),
+                    ],
+                    onChanged: (value) {
+                      setModalState(() {
+                        selectedModelValue = value ?? defaultProviderModelValue;
+                      });
+                    },
+                  ),
+                  if (showCustomModel)
+                    TextField(
+                      controller: controller,
+                      autofocus: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Custom model id',
+                      ),
+                    ),
+                  Text(
+                    providerModelHelperText(widget.workspace.provider),
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  Row(
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(''),
+                        child: const Text('Use default'),
+                      ),
+                      const Spacer(),
+                      FilledButton(
+                        onPressed: () => Navigator.of(context).pop(
+                          _selectedModelFromSheet(
+                            selectedValue: selectedModelValue,
+                            customValue: controller.text,
+                          ),
+                        ),
+                        child: const Text('Save'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+    controller.dispose();
+
+    if (!mounted || next == null) {
+      return;
+    }
+
+    setState(() {
+      final trimmed = next.trim();
+      _selectedModel = trimmed.isEmpty ? null : trimmed;
+      _modelSelectionTouched = true;
+    });
   }
 
   Future<void> _cancelSession() async {
@@ -673,15 +966,115 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
       }
     }
   }
+
+  Future<void> _confirmDeleteSession() async {
+    final api = ref.read(apiClientProvider);
+    if (api == null) {
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Delete session?'),
+          content: const Text(
+            'This permanently removes the conversation, runs, and shared artifacts for this session.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Delete'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _deleting = true;
+    });
+
+    try {
+      await api.deleteSession(widget.session.id);
+      ref.invalidate(sessionsProvider(widget.workspace.id));
+      if (mounted) {
+        Navigator.of(context).pop();
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.toString())));
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _deleting = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _copyAssistantMessage(String text) async {
+    if (text.trim().isEmpty) {
+      return;
+    }
+
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) {
+      return;
+    }
+
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        const SnackBar(content: Text('Copied AI message to clipboard.')),
+      );
+  }
 }
 
-enum _SessionDetailAction { downloadCurrent, refresh }
+enum _SessionDetailAction { artifacts, sessionExport, refresh, deleteSession }
 
 enum _TranscriptEntryKind { user, assistant, tool, system }
 
 enum _ToolState { running, completed, failed }
 
 enum _SystemTone { info, warning, error }
+
+String _dropdownValueForModel(String provider, String? model) {
+  if (model == null || model.trim().isEmpty) {
+    return defaultProviderModelValue;
+  }
+
+  return isKnownProviderModel(provider, model)
+      ? model.trim()
+      : customProviderModelValue;
+}
+
+String? _selectedModelFromSheet({
+  required String selectedValue,
+  required String customValue,
+}) {
+  if (selectedValue == defaultProviderModelValue) {
+    return '';
+  }
+
+  if (selectedValue == customProviderModelValue) {
+    final trimmed = customValue.trim();
+    return trimmed;
+  }
+
+  return selectedValue;
+}
 
 class _TranscriptEntry {
   const _TranscriptEntry._({
@@ -815,6 +1208,7 @@ class _MessageBubble extends StatelessWidget {
     required this.backgroundColor,
     required this.foregroundColor,
     required this.renderMarkdown,
+    this.onLongPress,
   });
 
   final _TranscriptEntry entry;
@@ -822,6 +1216,7 @@ class _MessageBubble extends StatelessWidget {
   final Color backgroundColor;
   final Color foregroundColor;
   final bool renderMarkdown;
+  final VoidCallback? onLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -835,81 +1230,86 @@ class _MessageBubble extends StatelessWidget {
       alignment: alignment,
       child: ConstrainedBox(
         constraints: BoxConstraints(maxWidth: maxWidth),
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: backgroundColor,
-            borderRadius: BorderRadius.circular(18),
-            boxShadow: entry.kind == _TranscriptEntryKind.assistant
-                ? const [
-                    BoxShadow(
-                      color: Color(0x12000000),
-                      blurRadius: 14,
-                      offset: Offset(0, 4),
-                    ),
-                  ]
-                : null,
-          ),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(11, 10, 11, 10),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              spacing: 7,
-              children: [
-                Row(
-                  children: [
-                    Text(
-                      entry.title,
-                      style: TextStyle(
-                        color: foregroundColor.withValues(alpha: 0.78),
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.3,
+        child: GestureDetector(
+          onLongPress: onLongPress,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: backgroundColor,
+              borderRadius: BorderRadius.circular(18),
+              boxShadow: entry.kind == _TranscriptEntryKind.assistant
+                  ? const [
+                      BoxShadow(
+                        color: AppPalette.shadow,
+                        blurRadius: 14,
+                        offset: Offset(0, 4),
                       ),
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      _formatTime(entry.ts),
-                      style: TextStyle(
-                        color: foregroundColor.withValues(alpha: 0.62),
-                        fontSize: 11,
+                    ]
+                  : null,
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(11, 10, 11, 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                spacing: 7,
+                children: [
+                  Row(
+                    children: [
+                      Text(
+                        entry.title,
+                        style: TextStyle(
+                          color: foregroundColor.withValues(alpha: 0.78),
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.3,
+                        ),
                       ),
-                    ),
-                    if (entry.isLive) ...[
-                      const Spacer(),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 3,
+                      const SizedBox(width: 6),
+                      Text(
+                        _formatTime(entry.ts),
+                        style: TextStyle(
+                          color: foregroundColor.withValues(alpha: 0.62),
+                          fontSize: 11,
                         ),
-                        decoration: BoxDecoration(
-                          color: foregroundColor.withValues(alpha: 0.14),
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                        child: Text(
-                          'Live',
-                          style: TextStyle(
-                            color: foregroundColor,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w700,
+                      ),
+                      if (entry.isLive) ...[
+                        const Spacer(),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 3,
+                          ),
+                          decoration: BoxDecoration(
+                            color: foregroundColor.withValues(alpha: 0.14),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Text(
+                            'Live',
+                            style: TextStyle(
+                              color: foregroundColor,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
                         ),
-                      ),
+                      ],
                     ],
-                  ],
-                ),
-                if (renderMarkdown)
-                  MarkdownBody(
-                    data: entry.text ?? '',
-                    softLineBreak: true,
-                    styleSheet: _markdownStyleSheet(
-                      context,
-                      textColor: foregroundColor,
-                      codeBackground: foregroundColor.withValues(alpha: 0.08),
-                    ),
-                  )
-                else
-                  SelectableText(entry.text ?? '', style: textStyle),
-              ],
+                  ),
+                  if (renderMarkdown)
+                    MarkdownBody(
+                      data: entry.text ?? '',
+                      softLineBreak: true,
+                      styleSheet: _markdownStyleSheet(
+                        context,
+                        textColor: foregroundColor,
+                        codeBackground: foregroundColor.withValues(alpha: 0.08),
+                      ),
+                    )
+                  else if (onLongPress != null)
+                    Text(entry.text ?? '', style: textStyle)
+                  else
+                    SelectableText(entry.text ?? '', style: textStyle),
+                ],
+              ),
             ),
           ),
         ),
@@ -935,9 +1335,9 @@ class _ToolCallCardState extends State<_ToolCallCard> {
     final entry = widget.entry;
     final state = entry.state ?? _ToolState.running;
     final status = switch (state) {
-      _ToolState.running => ('Running', const Color(0xFF9A5F16)),
-      _ToolState.completed => ('Completed', const Color(0xFF29785A)),
-      _ToolState.failed => ('Failed', const Color(0xFFB33D2E)),
+      _ToolState.running => ('Running', AppPalette.warning),
+      _ToolState.completed => ('Completed', AppPalette.success),
+      _ToolState.failed => ('Failed', AppPalette.error),
     };
     final hasDetails =
         entry.requestSummary != null || entry.responseSummary != null;
@@ -1026,7 +1426,7 @@ class _ToolDetailBlock extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(9),
       decoration: BoxDecoration(
-        color: const Color(0xFFFBF7F1),
+        color: AppPalette.surfaceSoft,
         borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
@@ -1110,9 +1510,9 @@ class _SystemEventCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tone = switch (entry.tone ?? _SystemTone.info) {
-      _SystemTone.info => const Color(0xFF2F5BA8),
-      _SystemTone.warning => const Color(0xFF9A5F16),
-      _SystemTone.error => const Color(0xFFB33D2E),
+      _SystemTone.info => AppPalette.info,
+      _SystemTone.warning => AppPalette.warning,
+      _SystemTone.error => AppPalette.error,
     };
 
     return Center(
@@ -1143,7 +1543,7 @@ class _SystemEventCard extends StatelessWidget {
                   entry.text!,
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: const Color(0xFF544A40),
+                    color: AppPalette.mutedInk,
                     height: 1.3,
                   ),
                 ),

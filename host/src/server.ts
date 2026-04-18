@@ -1,20 +1,21 @@
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, readdirSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
-import Fastify, { type FastifyRequest } from 'fastify';
+import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import type WebSocket from 'ws';
 import { z } from 'zod';
 
 import { AppDatabase } from './db.js';
-import { SessionService } from './sessionService.js';
+import { SessionService, SessionServiceError } from './sessionService.js';
 import { getHookStatus, installHooks } from './hookInstaller.js';
 import type {
   BroadcastEnvelope,
   HookIngressBody,
   ResolvedConfig,
+  ArtifactRegistrationBody,
   SessionExportRecord,
   WorkspaceConfig,
   WorkspaceRecord,
@@ -28,10 +29,12 @@ const pairSchema = z.object({
 
 const createSessionSchema = z.object({
   workspaceId: z.string().min(1),
+  model: z.string().trim().min(1).optional(),
   prompt: z.string().min(1),
 });
 
 const promptSchema = z.object({
+  model: z.string().trim().min(1).optional(),
   prompt: z.string().min(1),
 });
 
@@ -43,6 +46,15 @@ const createWorkspaceSchema = z.object({
 
 const browseDirectoriesSchema = z.object({
   path: z.string().trim().optional(),
+});
+
+const registerArtifactSchema = z.object({
+  remoteSessionId: z.string().min(1),
+  remoteRunId: z.string().min(1),
+  path: z.string().trim().min(1),
+  title: z.string().trim().optional(),
+  mimeType: z.string().trim().optional(),
+  requestedAt: z.string().min(1),
 });
 
 export async function startServer(config: ResolvedConfig): Promise<void> {
@@ -105,6 +117,7 @@ export async function startServer(config: ResolvedConfig): Promise<void> {
     daemonUrl,
     app.log,
     broadcast,
+    config.server.artifactsPath,
   );
 
   app.addHook('onClose', async () => {
@@ -153,6 +166,7 @@ export async function startServer(config: ResolvedConfig): Promise<void> {
       request.url.startsWith('/health') ||
       request.url.startsWith('/pair') ||
       request.url.startsWith('/internal/hooks') ||
+      request.url.startsWith('/internal/artifacts') ||
       request.url.startsWith('/ws')
     ) {
       return;
@@ -288,18 +302,35 @@ export async function startServer(config: ResolvedConfig): Promise<void> {
 
   app.get('/sessions', async (request) => {
     const workspaceId = String((request.query as Record<string, string>).workspaceId ?? '');
+    sessions.reconcileDetachedRuns(workspaceId);
     return database.listSessions(workspaceId);
   });
 
   app.post('/sessions', async (request, reply) => {
     const body = createSessionSchema.parse(request.body);
-    const session = sessions.createSession(body.workspaceId, body.prompt);
-    return reply.code(201).send(session);
+    try {
+      const session = sessions.createSession(
+        body.workspaceId,
+        body.prompt,
+        body.model,
+      );
+      return reply.code(201).send(session);
+    } catch (error) {
+      return sendSessionServiceError(reply, error);
+    }
   });
 
-  app.post('/sessions/:id/prompts', async (request) => {
+  app.post('/sessions/:id/prompts', async (request, reply) => {
     const body = promptSchema.parse(request.body);
-    return sessions.sendPrompt((request.params as { id: string }).id, body.prompt);
+    try {
+      return sessions.sendPrompt(
+        (request.params as { id: string }).id,
+        body.prompt,
+        body.model,
+      );
+    } catch (error) {
+      return sendSessionServiceError(reply, error);
+    }
   });
 
   app.post('/sessions/:id/cancel', async (request, reply) => {
@@ -311,13 +342,35 @@ export async function startServer(config: ResolvedConfig): Promise<void> {
     return { ok: true };
   });
 
+  app.delete('/sessions/:id', async (request, reply) => {
+    const outcome = sessions.deleteSession((request.params as { id: string }).id);
+    if (outcome === 'deleted') {
+      return { ok: true };
+    }
+
+    if (outcome === 'not_found') {
+      return reply.code(404).send({ error: 'Session not found' });
+    }
+
+    if (outcome === 'active') {
+      return reply.code(409).send({ error: 'Session has an active run' });
+    }
+
+    return reply.code(409).send({
+      error: 'Only completed or cancelled sessions can be deleted',
+    });
+  });
+
   app.get('/sessions/:id/events', async (request) => {
+    const sessionId = (request.params as { id: string }).id;
+    sessions.reconcileDetachedSession(sessionId);
     const afterSeq = Number((request.query as Record<string, string>).afterSeq ?? '0');
-    return database.getEvents((request.params as { id: string }).id, afterSeq);
+    return database.getEvents(sessionId, afterSeq);
   });
 
   app.get('/sessions/:id/runs', async (request, reply) => {
     const sessionId = (request.params as { id: string }).id;
+    sessions.reconcileDetachedSession(sessionId);
     const session = database.getSession(sessionId);
     if (!session) {
       return reply.code(404).send({ error: 'Session not found' });
@@ -326,8 +379,20 @@ export async function startServer(config: ResolvedConfig): Promise<void> {
     return database.listRuns(session.id);
   });
 
+  app.get('/sessions/:id/artifacts', async (request, reply) => {
+    const sessionId = (request.params as { id: string }).id;
+    sessions.reconcileDetachedSession(sessionId);
+    const session = database.getSession(sessionId);
+    if (!session) {
+      return reply.code(404).send({ error: 'Session not found' });
+    }
+
+    return sessions.listArtifacts(session.id);
+  });
+
   app.get('/sessions/:id/export', async (request, reply) => {
     const sessionId = (request.params as { id: string }).id;
+    sessions.reconcileDetachedSession(sessionId);
     const session = database.getSession(sessionId);
     if (!session) {
       return reply.code(404).send({ error: 'Session not found' });
@@ -347,6 +412,7 @@ export async function startServer(config: ResolvedConfig): Promise<void> {
       session,
       runs: database.listRuns(session.id),
       events: database.getEvents(session.id, 0),
+      artifacts: sessions.listArtifacts(session.id),
     };
 
     reply.header(
@@ -354,6 +420,27 @@ export async function startServer(config: ResolvedConfig): Promise<void> {
       `attachment; filename="session-${session.id}.json"`,
     );
     return reply.send(payload);
+  });
+
+  app.get('/artifacts/:id/download', async (request, reply) => {
+    const artifactId = (request.params as { id: string }).id;
+    const artifact = sessions.getArtifactRecord(artifactId);
+    if (!artifact) {
+      return reply.code(404).send({ error: 'Artifact not found' });
+    }
+
+    if (!existsSync(artifact.storedPath)) {
+      return reply.code(410).send({ error: 'Artifact file is no longer available' });
+    }
+
+    const stats = statSync(artifact.storedPath);
+    reply.header('content-type', artifact.mediaType);
+    reply.header('content-length', `${stats.size}`);
+    reply.header(
+      'content-disposition',
+      `attachment; filename="${artifact.filename.replaceAll('"', '_')}"`,
+    );
+    return reply.send(createReadStream(artifact.storedPath));
   });
 
   app.post('/internal/hooks', async (request, reply) => {
@@ -368,6 +455,26 @@ export async function startServer(config: ResolvedConfig): Promise<void> {
       return reply.send({ ok: true, events: events.length });
     } catch (error) {
       app.log.warn({ err: error }, 'Hook ingress rejected');
+      return reply.code(400).send({
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  app.post('/internal/artifacts', async (request, reply) => {
+    const token = request.headers['x-hook-token'];
+    if (typeof token !== 'string' || token.length === 0) {
+      return reply.code(401).send({ error: 'Missing hook token' });
+    }
+
+    try {
+      const body = registerArtifactSchema.parse(
+        request.body,
+      ) as ArtifactRegistrationBody;
+      const artifact = sessions.registerArtifact(token, body);
+      return reply.code(201).send(artifact);
+    } catch (error) {
+      app.log.warn({ err: error }, 'Artifact ingress rejected');
       return reply.code(400).send({
         error: error instanceof Error ? error.message : String(error),
       });
@@ -405,6 +512,23 @@ function isAuthorized(
   }
 
   return database.validateToken(auth.slice('Bearer '.length));
+}
+
+function sendSessionServiceError(reply: FastifyReply, error: unknown) {
+  if (!(error instanceof SessionServiceError)) {
+    throw error;
+  }
+
+  const message = error.message;
+  if (message.startsWith('Unknown session:')) {
+    return reply.code(error.statusCode).send({ error: 'Session not found' });
+  }
+
+  if (message.startsWith('Unknown workspace:')) {
+    return reply.code(error.statusCode).send({ error: 'Workspace not found' });
+  }
+
+  return reply.code(error.statusCode).send({ error: message });
 }
 
 function toWorkspaceRecord(
