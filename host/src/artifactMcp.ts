@@ -89,6 +89,33 @@ export function buildCodexArtifactMcpConfig(input: {
   ];
 }
 
+export function buildClaudeArtifactMcpConfig(input: {
+  daemonUrl: string;
+  sessionId: string;
+  runId: string;
+  hookToken: string;
+  workspaceRoot: string;
+}): string[] {
+  return [
+    '--mcp-config',
+    JSON.stringify({
+      mcpServers: {
+        [MCP_SERVER_NAME]: {
+          command: 'node',
+          args: [MCP_SERVER_SCRIPT_PATH],
+          env: {
+            REMOTE_DAEMON_URL: input.daemonUrl,
+            REMOTE_SESSION_ID: input.sessionId,
+            REMOTE_RUN_ID: input.runId,
+            REMOTE_HOOK_TOKEN: input.hookToken,
+            REMOTE_WORKSPACE_ROOT: input.workspaceRoot,
+          },
+        },
+      },
+    }),
+  ];
+}
+
 function readGeminiSettings(settingsPath: string): GeminiSettingsShape {
   if (!existsSync(settingsPath)) {
     return {};

@@ -1,7 +1,7 @@
 export type HookStatus = 'installed' | 'missing';
 export type SessionStatus = 'idle' | 'running' | 'failed' | 'cancelled';
 export type RunStatus = 'running' | 'completed' | 'failed' | 'cancelled';
-export type WorkspaceProvider = 'gemini' | 'codex';
+export type WorkspaceProvider = 'gemini' | 'codex' | 'claude';
 
 export interface WorkspaceConfig {
   id: string;

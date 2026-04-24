@@ -72,9 +72,25 @@ class FakeSessionApiClient extends ApiClient {
   @override
   Future<List<SessionEvent>> getEvents({
     required String sessionId,
-    required int afterSeq,
+    int afterSeq = 0,
+    int? beforeSeq,
+    int? limit,
   }) async {
-    return events.where((event) => event.seq > afterSeq).toList();
+    var filtered = events.where((event) => event.sessionId == sessionId);
+    if (beforeSeq != null) {
+      filtered = filtered.where((event) => event.seq < beforeSeq);
+    } else {
+      filtered = filtered.where((event) => event.seq > afterSeq);
+    }
+
+    final ordered = filtered.toList()..sort((left, right) => left.seq.compareTo(right.seq));
+    if (beforeSeq != null && limit != null && ordered.length > limit) {
+      return ordered.sublist(ordered.length - limit);
+    }
+    if (beforeSeq == null && afterSeq == 0 && limit != null && ordered.length > limit) {
+      return ordered.sublist(ordered.length - limit);
+    }
+    return ordered;
   }
 }
 
@@ -85,15 +101,15 @@ class FakeAuthController extends AuthController {
 
   final AuthStorage storage;
   String? lastBaseUrl;
-  String? lastCode;
+  String? lastPassword;
 
   @override
   Future<void> load() async {}
 
   @override
-  Future<void> pair({required String baseUrl, required String code}) async {
+  Future<void> pair({required String baseUrl, required String password}) async {
     lastBaseUrl = baseUrl;
-    lastCode = code;
+    lastPassword = password;
     final auth = AuthSession(baseUrl: baseUrl, token: 'token');
     await storage.write(auth);
     state = AsyncValue.data(auth);
@@ -124,7 +140,7 @@ void main() {
     expect(find.text('Recent hosts'), findsOneWidget);
 
     final hostField = find.byKey(const ValueKey('pair-host-field'));
-    final codeField = find.byKey(const ValueKey('pair-code-field'));
+    final passwordField = find.byKey(const ValueKey('pair-password-field'));
 
     EditableText hostEditable = tester.widget<EditableText>(
       find.descendant(of: hostField, matching: find.byType(EditableText)),
@@ -145,12 +161,12 @@ void main() {
     );
     expect(hostEditable.controller.text, host);
 
-    await tester.enterText(codeField, '123-456');
+    await tester.enterText(passwordField, 'my-secret-password');
     await tester.tap(find.text('Pair and connect'));
     await tester.pumpAndSettle();
 
     expect(controller.lastBaseUrl, host);
-    expect(controller.lastCode, '123-456');
+    expect(controller.lastPassword, 'my-secret-password');
     expect(storage.lastWrittenSession?.baseUrl, host);
     expect(find.textContaining('Pairing succeeded'), findsOneWidget);
   });
@@ -179,8 +195,8 @@ void main() {
       'http://127.0.0.1:8918/ieb8izzxc0bt/',
     );
     await tester.enterText(
-      find.byKey(const ValueKey('pair-code-field')),
-      '123-456',
+      find.byKey(const ValueKey('pair-password-field')),
+      'my-secret-password',
     );
     await tester.tap(find.text('Pair and connect'));
     await tester.pumpAndSettle();

@@ -1,5 +1,12 @@
-import { createHash, randomBytes, randomInt, type BinaryLike } from 'node:crypto';
+import {
+  createHash,
+  randomBytes,
+  timingSafeEqual,
+  type BinaryLike,
+} from 'node:crypto';
 import path from 'node:path';
+
+export const PAIRING_PASSWORD_ENV_VAR = 'GEMINI_REMOTE_PAIRING_PASSWORD';
 
 export function nowIso(): string {
   return new Date().toISOString();
@@ -13,10 +20,27 @@ export function createAccessToken(): string {
   return randomBytes(24).toString('hex');
 }
 
-export function createPairingCode(): string {
-  const left = randomInt(100, 1000);
-  const right = randomInt(100, 1000);
-  return `${left}-${right}`;
+export function readPairingPasswordFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const password = env[PAIRING_PASSWORD_ENV_VAR]?.trim();
+  if (!password) {
+    throw new Error(
+      `Missing ${PAIRING_PASSWORD_ENV_VAR}. Set it before starting the host daemon.`,
+    );
+  }
+
+  return password;
+}
+
+export function secureEquals(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  if (leftBuffer.length !== rightBuffer.length) {
+    return false;
+  }
+
+  return timingSafeEqual(leftBuffer, rightBuffer);
 }
 
 export function clampText(

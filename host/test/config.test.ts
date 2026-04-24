@@ -35,6 +35,12 @@ test('loadConfig defaults missing workspace providers to gemini', async (t) => {
             rootPath: '../codex-workspace',
             provider: 'codex',
           },
+          {
+            id: 'claude',
+            name: 'Claude Workspace',
+            rootPath: '../claude-workspace',
+            provider: 'claude',
+          },
         ],
       },
       null,
@@ -46,6 +52,7 @@ test('loadConfig defaults missing workspace providers to gemini', async (t) => {
 
   assert.equal(config.workspaces[0]?.provider, 'gemini');
   assert.equal(config.workspaces[1]?.provider, 'codex');
+  assert.equal(config.workspaces[2]?.provider, 'claude');
   assert.equal(
     config.workspaces[0]?.rootPath,
     path.resolve(configDir, '../legacy-workspace'),

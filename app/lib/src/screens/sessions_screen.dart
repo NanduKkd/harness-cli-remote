@@ -45,6 +45,7 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
     return AtmosphereScaffold(
       title: widget.workspace.name,
       floatingActionButton: FloatingActionButton.extended(
+        key: const ValueKey('sessions-new-session-fab'),
         onPressed: () => _onNewSessionPressed(context, ref),
         icon: const Icon(Icons.play_circle_fill),
         label: const Text('New session'),
@@ -171,112 +172,17 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
   }
 
   Future<void> _openCreateDialog(BuildContext context, WidgetRef ref) async {
-    final promptController = TextEditingController();
-    final customModelController = TextEditingController();
-    final modelOptions = providerModelOptions(widget.workspace.provider);
-    var selectedModelValue = defaultProviderModelValue;
     final api = ref.read(apiClientProvider);
     if (api == null) {
-      promptController.dispose();
-      customModelController.dispose();
       return;
     }
 
     final draft = await showModalBottomSheet<_SessionDraft>(
       context: context,
       isScrollControlled: true,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setModalState) {
-            final showCustomModel =
-                selectedModelValue == customProviderModelValue;
-            return Padding(
-              padding: EdgeInsets.only(
-                left: 14,
-                right: 14,
-                top: 14,
-                bottom: 14 + MediaQuery.viewInsetsOf(context).bottom,
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                spacing: 10,
-                children: [
-                  Text(
-                    'Start a remote ${providerDisplayName(widget.workspace.provider)} session',
-                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  TextField(
-                    controller: promptController,
-                    minLines: 2,
-                    maxLines: 5,
-                    decoration: const InputDecoration(
-                      labelText: 'Initial prompt',
-                    ),
-                  ),
-                  DropdownButtonFormField<String>(
-                    key: ValueKey('session-model-$selectedModelValue'),
-                    initialValue: selectedModelValue,
-                    isExpanded: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Model',
-                    ),
-                    items: [
-                      const DropdownMenuItem<String>(
-                        value: defaultProviderModelValue,
-                        child: Text('Use provider default'),
-                      ),
-                      ...modelOptions.map(
-                        (option) => DropdownMenuItem<String>(
-                          value: option.value,
-                          child: Text(option.label),
-                        ),
-                      ),
-                      const DropdownMenuItem<String>(
-                        value: customProviderModelValue,
-                        child: Text('Custom model id'),
-                      ),
-                    ],
-                    onChanged: (value) {
-                      setModalState(() {
-                        selectedModelValue = value ?? defaultProviderModelValue;
-                      });
-                    },
-                  ),
-                  if (showCustomModel)
-                    TextField(
-                      controller: customModelController,
-                      decoration: const InputDecoration(
-                        labelText: 'Custom model id',
-                      ),
-                    ),
-                  Text(
-                    providerModelHelperText(widget.workspace.provider),
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                  FilledButton(
-                    onPressed: () => Navigator.of(context).pop(
-                      _SessionDraft(
-                        prompt: promptController.text.trim(),
-                        model: _selectedModelFromDropdown(
-                          selectedValue: selectedModelValue,
-                          customValue: customModelController.text,
-                        ),
-                      ),
-                    ),
-                    child: const Text('Start session'),
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
+      builder: (_) =>
+          _CreateSessionSheet(provider: widget.workspace.provider),
     );
-    promptController.dispose();
-    customModelController.dispose();
 
     if (draft == null || draft.prompt.isEmpty) {
       return;
@@ -389,4 +295,126 @@ class _SessionDraft {
 
   final String prompt;
   final String? model;
+}
+
+class _CreateSessionSheet extends StatefulWidget {
+  const _CreateSessionSheet({required this.provider});
+
+  final String provider;
+
+  @override
+  State<_CreateSessionSheet> createState() => _CreateSessionSheetState();
+}
+
+class _CreateSessionSheetState extends State<_CreateSessionSheet> {
+  late final TextEditingController _promptController;
+  late final TextEditingController _customModelController;
+  late String _selectedModelValue;
+
+  @override
+  void initState() {
+    super.initState();
+    _promptController = TextEditingController();
+    _customModelController = TextEditingController();
+    _selectedModelValue = defaultProviderModelValue;
+  }
+
+  @override
+  void dispose() {
+    _promptController.dispose();
+    _customModelController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final modelOptions = providerModelOptions(widget.provider);
+    final showCustomModel = _selectedModelValue == customProviderModelValue;
+
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.only(
+          left: 14,
+          right: 14,
+          top: 14,
+          bottom: 14 + MediaQuery.viewInsetsOf(context).bottom,
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            spacing: 10,
+            children: [
+              Text(
+                'Start a remote ${providerDisplayName(widget.provider)} session',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+              ),
+              TextField(
+                controller: _promptController,
+                minLines: 2,
+                maxLines: 5,
+                decoration: const InputDecoration(
+                  labelText: 'Initial prompt',
+                ),
+              ),
+              DropdownButtonFormField<String>(
+                key: ValueKey('session-model-$_selectedModelValue'),
+                initialValue: _selectedModelValue,
+                isExpanded: true,
+                decoration: const InputDecoration(
+                  labelText: 'Model',
+                ),
+                items: [
+                  const DropdownMenuItem<String>(
+                    value: defaultProviderModelValue,
+                    child: Text('Use provider default'),
+                  ),
+                  ...modelOptions.map(
+                    (option) => DropdownMenuItem<String>(
+                      value: option.value,
+                      child: Text(option.label),
+                    ),
+                  ),
+                  const DropdownMenuItem<String>(
+                    value: customProviderModelValue,
+                    child: Text('Custom model id'),
+                  ),
+                ],
+                onChanged: (value) {
+                  setState(() {
+                    _selectedModelValue = value ?? defaultProviderModelValue;
+                  });
+                },
+              ),
+              if (showCustomModel)
+                TextField(
+                  controller: _customModelController,
+                  decoration: const InputDecoration(
+                    labelText: 'Custom model id',
+                  ),
+                ),
+              Text(
+                providerModelHelperText(widget.provider),
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(
+                  _SessionDraft(
+                    prompt: _promptController.text.trim(),
+                    model: _selectedModelFromDropdown(
+                      selectedValue: _selectedModelValue,
+                      customValue: _customModelController.text,
+                    ),
+                  ),
+                ),
+                child: const Text('Start session'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }

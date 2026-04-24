@@ -745,25 +745,116 @@ export class AppDatabase {
     };
   }
 
-  getEvents(sessionId: string, afterSeq = 0): SessionEventRecord[] {
-    const rows = this.db
-      .prepare<
-        [string, number],
-        {
-          session_id: string;
-          run_id: string | null;
-          seq: number;
-          type: string;
-          ts: string;
-          payload_json: string;
-        }
-      >(
-        `SELECT session_id, run_id, seq, type, ts, payload_json
-         FROM session_events
-         WHERE session_id = ? AND seq > ?
-         ORDER BY seq ASC`,
-      )
-      .all(sessionId, afterSeq);
+  getEvents(
+    sessionId: string,
+    afterSeqOrOptions:
+      | number
+      | {
+          afterSeq?: number;
+          beforeSeq?: number;
+          limit?: number;
+        } = 0,
+  ): SessionEventRecord[] {
+    const options =
+      typeof afterSeqOrOptions === 'number'
+        ? { afterSeq: afterSeqOrOptions }
+        : afterSeqOrOptions;
+    const afterSeq = options.afterSeq ?? 0;
+    const beforeSeq = options.beforeSeq;
+    const limit = options.limit;
+
+    let rows: Array<{
+      session_id: string;
+      run_id: string | null;
+      seq: number;
+      type: string;
+      ts: string;
+      payload_json: string;
+    }>;
+
+    if (beforeSeq != null) {
+      if (limit != null) {
+        rows = this.db
+          .prepare<
+            [string, number, number],
+            {
+              session_id: string;
+              run_id: string | null;
+              seq: number;
+              type: string;
+              ts: string;
+              payload_json: string;
+            }
+          >(
+            `SELECT session_id, run_id, seq, type, ts, payload_json
+             FROM session_events
+             WHERE session_id = ? AND seq < ?
+             ORDER BY seq DESC
+             LIMIT ?`,
+          )
+          .all(sessionId, beforeSeq, limit)
+          .reverse();
+      } else {
+        rows = this.db
+          .prepare<
+            [string, number],
+            {
+              session_id: string;
+              run_id: string | null;
+              seq: number;
+              type: string;
+              ts: string;
+              payload_json: string;
+            }
+          >(
+            `SELECT session_id, run_id, seq, type, ts, payload_json
+             FROM session_events
+             WHERE session_id = ? AND seq < ?
+             ORDER BY seq ASC`,
+          )
+          .all(sessionId, beforeSeq);
+      }
+    } else if (limit != null) {
+      rows = this.db
+        .prepare<
+          [string, number],
+          {
+            session_id: string;
+            run_id: string | null;
+            seq: number;
+            type: string;
+            ts: string;
+            payload_json: string;
+          }
+        >(
+          `SELECT session_id, run_id, seq, type, ts, payload_json
+           FROM session_events
+           WHERE session_id = ?
+           ORDER BY seq DESC
+           LIMIT ?`,
+        )
+        .all(sessionId, limit)
+        .reverse();
+    } else {
+      rows = this.db
+        .prepare<
+          [string, number],
+          {
+            session_id: string;
+            run_id: string | null;
+            seq: number;
+            type: string;
+            ts: string;
+            payload_json: string;
+          }
+        >(
+          `SELECT session_id, run_id, seq, type, ts, payload_json
+           FROM session_events
+           WHERE session_id = ? AND seq > ?
+           ORDER BY seq ASC`,
+        )
+        .all(sessionId, afterSeq);
+    }
 
     return rows.map((row) => ({
       sessionId: row.session_id,

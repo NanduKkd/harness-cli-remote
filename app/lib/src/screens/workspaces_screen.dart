@@ -165,6 +165,14 @@ class _WorkspacesScreenState extends ConsumerState<WorkspacesScreen> {
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
+                            ButtonSegment<String>(
+                              value: 'claude',
+                              label: Text(
+                                'Claude',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
                           ],
                           selected: {_providerFilter},
                           onSelectionChanged: (selection) {
@@ -540,6 +548,7 @@ class _CreateWorkspaceSheetState extends ConsumerState<_CreateWorkspaceSheet> {
                 segments: const [
                   ButtonSegment<String>(value: 'gemini', label: Text('Gemini')),
                   ButtonSegment<String>(value: 'codex', label: Text('Codex')),
+                  ButtonSegment<String>(value: 'claude', label: Text('Claude')),
                 ],
                 selected: {_provider},
                 onSelectionChanged: _creating

@@ -424,3 +424,54 @@ test('AppDatabase recovers orphaned running runs on daemon startup', async (t) =
     ),
   );
 });
+
+test('AppDatabase returns the latest event page in ascending order', async (t) => {
+  const tempDir = await makeTempDir('gemini-remote-db-event-page-');
+  t.after(async () => {
+    await cleanupTempDir(tempDir);
+  });
+
+  const dbPath = path.join(tempDir, 'data', 'app.sqlite');
+  await mkdir(path.dirname(dbPath), { recursive: true });
+
+  const database = new AppDatabase(dbPath);
+  t.after(() => {
+    database.close();
+  });
+
+  database.syncWorkspaces([
+    {
+      id: 'workspace-1',
+      name: 'Workspace',
+      rootPath: '/tmp/workspace-1',
+      provider: 'gemini',
+    },
+  ]);
+
+  const session = database.createSession('session-1', 'workspace-1');
+  const run = database.createRun('run-1', session.id, 'page history');
+  for (let index = 0; index < 5; index += 1) {
+    database.insertEvent(
+      session.id,
+      run.id,
+      'message.completed',
+      { text: `Message ${index + 1}` },
+      `2026-04-01T00:00:0${index}.000Z`,
+    );
+  }
+
+  const latestPage = database.getEvents(session.id, { limit: 2 });
+  const olderPage = database.getEvents(session.id, {
+    beforeSeq: latestPage[0]!.seq,
+    limit: 2,
+  });
+
+  assert.deepEqual(
+    latestPage.map((event) => event.seq),
+    [4, 5],
+  );
+  assert.deepEqual(
+    olderPage.map((event) => event.seq),
+    [2, 3],
+  );
+});

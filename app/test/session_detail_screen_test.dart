@@ -20,11 +20,25 @@ class FakeApiClient extends ApiClient {
   @override
   Future<List<SessionEvent>> getEvents({
     required String sessionId,
-    required int afterSeq,
+    int afterSeq = 0,
+    int? beforeSeq,
+    int? limit,
   }) async {
-    return events
-        .where((event) => event.sessionId == sessionId && event.seq > afterSeq)
-        .toList();
+    var filtered = events.where((event) => event.sessionId == sessionId);
+    if (beforeSeq != null) {
+      filtered = filtered.where((event) => event.seq < beforeSeq);
+    } else {
+      filtered = filtered.where((event) => event.seq > afterSeq);
+    }
+
+    final ordered = filtered.toList()..sort((left, right) => left.seq.compareTo(right.seq));
+    if (beforeSeq != null && limit != null && ordered.length > limit) {
+      return ordered.sublist(ordered.length - limit);
+    }
+    if (beforeSeq == null && afterSeq == 0 && limit != null && ordered.length > limit) {
+      return ordered.sublist(ordered.length - limit);
+    }
+    return ordered;
   }
 
   @override
@@ -281,5 +295,58 @@ void main() {
       greaterThan(firstExtent),
     );
     expectAtBottom(tester);
+  });
+
+  testWidgets('legacy file_change notifications render as tool cards', (
+    WidgetTester tester,
+  ) async {
+    final events = <SessionEvent>[
+      SessionEvent(
+        sessionId: session.id,
+        runId: 'run-file-change',
+        seq: 1,
+        type: 'notification',
+        ts: DateTime(2026, 4, 10, 10),
+        payload: {
+          'notificationType': 'file_change',
+          'message': 'Codex reported File Change activity.',
+          'details': '''
+{
+  "id": "item_28",
+  "type": "file_change",
+  "changes": [
+    {
+      "path": "/tmp/workspace/app/lib/src/example.dart",
+      "kind": "update"
+    }
+  ],
+  "status": "completed"
+}
+''',
+        },
+      ),
+    ];
+    final apiClient = FakeApiClient(events: events, sessions: [session]);
+    final realtime = FakeRealtimeService();
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          apiClientProvider.overrideWithValue(apiClient),
+          realtimeServiceProvider.overrideWithValue(realtime),
+        ],
+        child: MaterialApp(
+          home: SessionDetailScreen(workspace: workspace, session: session),
+        ),
+      ),
+    );
+    await pumpConversation(tester);
+
+    expect(find.text('File Change'), findsOneWidget);
+    expect(find.text('Notification'), findsNothing);
+    await tester.tap(find.text('Show Details'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Changes:'), findsOneWidget);
+    expect(find.textContaining('Status: completed'), findsOneWidget);
   });
 }

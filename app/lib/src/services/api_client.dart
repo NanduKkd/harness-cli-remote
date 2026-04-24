@@ -13,14 +13,21 @@ class ApiClient {
 
   static Future<String> pair({
     required String baseUrl,
-    required String code,
+    required String password,
+    http.Client? client,
   }) async {
     final uri = resolveBaseUrlPath(baseUrl, '/pair');
-    final response = await http.post(
-      uri,
-      headers: {'content-type': 'application/json'},
-      body: jsonEncode({'code': code}),
-    );
+    final response = client != null
+        ? await client.post(
+            uri,
+            headers: {'content-type': 'application/json'},
+            body: jsonEncode({'password': password}),
+          )
+        : await http.post(
+            uri,
+            headers: {'content-type': 'application/json'},
+            body: jsonEncode({'password': password}),
+          );
     final body = _decode(response);
     _throwIfFailed(response, body);
     return body['token'] as String;
@@ -142,11 +149,18 @@ class ApiClient {
 
   Future<List<SessionEvent>> getEvents({
     required String sessionId,
-    required int afterSeq,
+    int afterSeq = 0,
+    int? beforeSeq,
+    int? limit,
   }) async {
     final response = await _get(
       '/sessions/$sessionId/events',
-      query: {'afterSeq': '$afterSeq'},
+      query: {
+        'afterSeq': '$afterSeq',
+        if (beforeSeq != null) 'beforeSeq': '$beforeSeq',
+        if (limit != null) 'limit': '$limit',
+        'payload': 'summary',
+      },
     );
     if (response.statusCode >= 400) {
       _throwIfFailed(response, _decode(response));

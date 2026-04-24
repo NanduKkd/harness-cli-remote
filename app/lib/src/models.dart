@@ -356,6 +356,8 @@ class RealtimeEnvelope {
 
 String providerDisplayName(String provider) {
   switch (provider) {
+    case 'claude':
+      return 'Claude Code';
     case 'codex':
       return 'Codex';
     case 'gemini':
@@ -366,6 +368,8 @@ String providerDisplayName(String provider) {
 
 String providerSessionLabel(String provider) {
   switch (provider) {
+    case 'claude':
+      return 'Session id';
     case 'codex':
       return 'Thread id';
     case 'gemini':
@@ -389,12 +393,31 @@ String providerModelHelperText(String provider) {
 
 List<ProviderModelOption> providerModelOptions(String provider) {
   switch (provider) {
+    case 'claude':
+      return const [
+        ProviderModelOption(value: 'sonnet', label: 'Sonnet (Latest)'),
+        ProviderModelOption(
+          value: 'claude-sonnet-4-6',
+          label: 'Claude Sonnet 4.6',
+        ),
+        ProviderModelOption(value: 'opus', label: 'Opus (Latest)'),
+        ProviderModelOption(
+          value: 'claude-opus-4-6',
+          label: 'Claude Opus 4.6',
+        ),
+        ProviderModelOption(value: 'haiku', label: 'Haiku'),
+        ProviderModelOption(value: 'best', label: 'Best Available'),
+        ProviderModelOption(value: 'opusplan', label: 'Opus Plan'),
+      ];
     case 'codex':
       return const [
+        ProviderModelOption(
+          value: 'gpt-5.5',
+          label: 'GPT-5.5',
+        ),
         ProviderModelOption(value: 'gpt-5.4', label: 'GPT-5.4'),
         ProviderModelOption(value: 'gpt-5.4-mini', label: 'GPT-5.4 Mini'),
         ProviderModelOption(value: 'gpt-5.3-codex', label: 'GPT-5.3-Codex'),
-        ProviderModelOption(value: 'gpt-5.2-codex', label: 'GPT-5.2-Codex'),
         ProviderModelOption(
           value: 'gpt-5.1-codex-max',
           label: 'GPT-5.1 Codex Max',

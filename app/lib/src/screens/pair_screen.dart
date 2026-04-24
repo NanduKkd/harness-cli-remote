@@ -20,7 +20,7 @@ class PairScreen extends ConsumerStatefulWidget {
 
 class _PairScreenState extends ConsumerState<PairScreen> {
   late final TextEditingController _hostController;
-  late final TextEditingController _codeController;
+  late final TextEditingController _passwordController;
 
   bool _isCheckingHost = false;
   bool _isPairing = false;
@@ -33,9 +33,9 @@ class _PairScreenState extends ConsumerState<PairScreen> {
   void initState() {
     super.initState();
     _hostController = TextEditingController();
-    _codeController = TextEditingController();
+    _passwordController = TextEditingController();
     _hostController.addListener(_handleInputChanged);
-    _codeController.addListener(_handleInputChanged);
+    _passwordController.addListener(_handleInputChanged);
   }
 
   @override
@@ -43,7 +43,7 @@ class _PairScreenState extends ConsumerState<PairScreen> {
     _hostController
       ..removeListener(_handleInputChanged)
       ..dispose();
-    _codeController
+    _passwordController
       ..removeListener(_handleInputChanged)
       ..dispose();
     super.dispose();
@@ -189,9 +189,9 @@ class _PairScreenState extends ConsumerState<PairScreen> {
       return;
     }
 
-    final code = _codeController.text.trim();
-    if (code.isEmpty) {
-      _showSnackBar('Enter the pairing code from the host.');
+    final password = _passwordController.text.trim();
+    if (password.isEmpty) {
+      _showSnackBar('Enter the password configured on the host.');
       return;
     }
 
@@ -204,7 +204,7 @@ class _PairScreenState extends ConsumerState<PairScreen> {
       await _probeHost(baseUrl);
       await ref
           .read(authControllerProvider.notifier)
-          .pair(baseUrl: baseUrl, code: code);
+          .pair(baseUrl: baseUrl, password: password);
       _setStatus(
         'Pairing succeeded. Opening your workspaces...',
         colorScheme.primary,
@@ -261,7 +261,7 @@ class _PairScreenState extends ConsumerState<PairScreen> {
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
                 ),
                 Text(
-                  'Paste the host URL, verify it is reachable, then enter the pairing code printed by the daemon.',
+                  'Paste the host URL, verify it is reachable, then enter the password configured on the host daemon.',
                 ),
               ],
             ),
@@ -344,16 +344,21 @@ class _PairScreenState extends ConsumerState<PairScreen> {
                   error: (error, stackTrace) => const SizedBox.shrink(),
                 ),
                 const Text(
-                  'Pairing code',
+                  'Host password',
                   style: TextStyle(fontWeight: FontWeight.w700),
                 ),
                 TextField(
-                  key: const ValueKey('pair-code-field'),
-                  controller: _codeController,
+                  key: const ValueKey('pair-password-field'),
+                  controller: _passwordController,
                   keyboardType: TextInputType.text,
                   textInputAction: TextInputAction.done,
                   onSubmitted: (_) => _pair(),
-                  decoration: const InputDecoration(hintText: '123-456'),
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    hintText: 'Configured on the host',
+                  ),
                 ),
                 Row(
                   children: [

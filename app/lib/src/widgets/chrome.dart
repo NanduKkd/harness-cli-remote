@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../models.dart';
 import '../theme.dart';
@@ -21,25 +22,28 @@ class AtmosphereScaffold extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: AppPalette.atmosphereGradient,
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle.dark,
+      child: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: AppPalette.atmosphereGradient,
+          ),
         ),
-      ),
-      child: Scaffold(
-        backgroundColor: Colors.transparent,
-        appBar: showAppBar
-            ? AppBar(
-                title: Text(title),
-                backgroundColor: Colors.transparent,
-                actions: actions,
-              )
-            : null,
-        body: SafeArea(child: body),
-        floatingActionButton: floatingActionButton,
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          appBar: showAppBar
+              ? AppBar(
+                  title: Text(title),
+                  backgroundColor: Colors.transparent,
+                  actions: actions,
+                )
+              : null,
+          body: SafeArea(child: body),
+          floatingActionButton: floatingActionButton,
+        ),
       ),
     );
   }
@@ -158,6 +162,8 @@ String connectionLabel(ConnectionStatus status) {
 
 Color providerColor(String provider) {
   switch (provider) {
+    case 'claude':
+      return AppPalette.providerClaude;
     case 'codex':
       return AppPalette.providerCodex;
     case 'gemini':

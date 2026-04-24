@@ -15,6 +15,12 @@
       "name": "Codex Workspace",
       "rootPath": "/absolute/path/to/your/codex-project",
       "provider": "codex"
+    },
+    {
+      "id": "workspace-3",
+      "name": "Claude Workspace",
+      "rootPath": "/absolute/path/to/your/claude-project",
+      "provider": "claude"
     }
   ]
 }

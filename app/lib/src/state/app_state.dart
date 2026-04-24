@@ -80,9 +80,12 @@ class AuthController extends StateNotifier<AsyncValue<AuthSession?>> {
     state = await AsyncValue.guard(_storage.read);
   }
 
-  Future<void> pair({required String baseUrl, required String code}) async {
+  Future<void> pair({required String baseUrl, required String password}) async {
     final normalizedUrl = normalizeBaseUrl(baseUrl);
-    final token = await ApiClient.pair(baseUrl: normalizedUrl, code: code);
+    final token = await ApiClient.pair(
+      baseUrl: normalizedUrl,
+      password: password,
+    );
     final auth = AuthSession(baseUrl: normalizedUrl, token: token);
     await _storage.write(auth);
     state = AsyncValue.data(auth);

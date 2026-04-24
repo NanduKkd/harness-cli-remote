@@ -3,9 +3,91 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 
+import { getClaudeHookStatus, installClaudeHooks } from '../src/claudeHookInstaller.js';
 import { getCodexHookStatus, installCodexHooks } from '../src/codexHookInstaller.js';
 import { installHooks } from '../src/hookInstaller.js';
 import { cleanupTempDir, makeTempDir } from './testUtils.js';
+
+test('installClaudeHooks preserves unrelated hooks and de-duplicates the bridge entry', async (t) => {
+  const tempDir = await makeTempDir('gemini-remote-claude-hooks-');
+  t.after(async () => {
+    await cleanupTempDir(tempDir);
+  });
+
+  const claudeDir = path.join(tempDir, '.claude');
+  await mkdir(path.join(claudeDir, 'hooks'), { recursive: true });
+  await writeFile(
+    path.join(claudeDir, 'settings.json'),
+    JSON.stringify(
+      {
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: '.*',
+              hooks: [
+                {
+                  type: 'command',
+                  command:
+                    'node "${CLAUDE_PROJECT_DIR}/.claude/hooks/claude-remote-bridge.js"',
+                },
+                {
+                  type: 'command',
+                  command: './existing-pre-tool.sh',
+                },
+              ],
+            },
+          ],
+          SessionStart: [
+            {
+              hooks: [
+                {
+                  type: 'command',
+                  command: './existing-session-start.sh',
+                },
+              ],
+            },
+          ],
+        },
+      },
+      null,
+      2,
+    ),
+  );
+
+  installClaudeHooks(tempDir);
+
+  const settings = JSON.parse(
+    await readFile(path.join(claudeDir, 'settings.json'), 'utf8'),
+  ) as {
+    hooks?: Record<
+      string,
+      Array<{
+        matcher?: string;
+        hooks?: Array<{ command?: string }>;
+      }>
+    >;
+  };
+  const preToolHooks =
+    settings.hooks?.PreToolUse?.flatMap((entry) => entry.hooks ?? []) ?? [];
+  const bridgeHooks = preToolHooks.filter(
+    (hook) =>
+      hook.command ===
+      'node "${CLAUDE_PROJECT_DIR}/.claude/hooks/claude-remote-bridge.js"',
+  );
+
+  assert.equal(bridgeHooks.length, 1);
+  assert.ok(
+    preToolHooks.some((hook) => hook.command === './existing-pre-tool.sh'),
+  );
+  assert.ok(
+    settings.hooks?.SessionStart?.some((entry) =>
+      (entry.hooks ?? []).some(
+        (hook) => hook.command === './existing-session-start.sh',
+      ),
+    ),
+  );
+  assert.equal(getClaudeHookStatus(tempDir), 'installed');
+});
 
 test('installCodexHooks preserves unrelated hooks and de-duplicates the bridge entry', async (t) => {
   const tempDir = await makeTempDir('gemini-remote-hooks-');

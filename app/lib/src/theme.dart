@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 class AppPalette {
   static const Color brandBlue = Color(0xFF77DDEE);
@@ -23,6 +24,7 @@ class AppPalette {
 
   static const Color providerGemini = info;
   static const Color providerCodex = Color(0xFF4A7869);
+  static const Color providerClaude = Color(0xFFB56936);
   static const Color artifactSurface = Color(0xFFDDF3F8);
 
   static const List<Color> atmosphereGradient = <Color>[
@@ -136,6 +138,7 @@ ThemeData buildAppTheme() {
       backgroundColor: Colors.transparent,
       foregroundColor: AppPalette.ink,
       surfaceTintColor: Colors.transparent,
+      systemOverlayStyle: SystemUiOverlayStyle.dark,
       titleTextStyle: baseTheme.textTheme.titleLarge?.copyWith(
         fontWeight: FontWeight.w700,
         color: AppPalette.ink,

@@ -10,6 +10,10 @@ import { z } from 'zod';
 
 import { AppDatabase } from './db.js';
 import { SessionService, SessionServiceError } from './sessionService.js';
+import {
+  toSessionEventPayloadMode,
+  viewSessionEvent,
+} from './sessionEvents.js';
 import { getHookStatus, installHooks } from './hookInstaller.js';
 import type {
   BroadcastEnvelope,
@@ -21,11 +25,21 @@ import type {
   WorkspaceRecord,
   WorkspaceRepairRecord,
 } from './types.js';
-import { createPairingCode } from './util.js';
+import {
+  PAIRING_PASSWORD_ENV_VAR,
+  readPairingPasswordFromEnv,
+  secureEquals,
+} from './util.js';
 
-const pairSchema = z.object({
-  code: z.string().min(1),
-});
+const pairSchema = z
+  .object({
+    password: z.string().trim().min(1).optional(),
+    code: z.string().trim().min(1).optional(),
+  })
+  .refine((body) => body.password != null || body.code != null, {
+    message: 'Password is required',
+    path: ['password'],
+  });
 
 const createSessionSchema = z.object({
   workspaceId: z.string().min(1),
@@ -41,7 +55,7 @@ const promptSchema = z.object({
 const createWorkspaceSchema = z.object({
   name: z.string().trim().optional(),
   rootPath: z.string().trim().min(1),
-  provider: z.enum(['gemini', 'codex']).default('gemini'),
+  provider: z.enum(['gemini', 'codex', 'claude']).default('gemini'),
 });
 
 const browseDirectoriesSchema = z.object({
@@ -58,6 +72,7 @@ const registerArtifactSchema = z.object({
 });
 
 export async function startServer(config: ResolvedConfig): Promise<void> {
+  const pairingPassword = readPairingPasswordFromEnv();
   const app = Fastify({
     logger: true,
   });
@@ -69,7 +84,6 @@ export async function startServer(config: ResolvedConfig): Promise<void> {
   const workspaces = new Map<string, WorkspaceConfig>();
   refreshWorkspaceMap(database, workspaces);
   const sockets = new Set<WebSocket>();
-  const pairingCode = createPairingCode();
   const daemonUrl = `http://127.0.0.1:${config.server.port}`;
 
   if (recoveredRuns.length > 0) {
@@ -131,8 +145,9 @@ export async function startServer(config: ResolvedConfig): Promise<void> {
 
   app.post('/pair', async (request, reply) => {
     const body = pairSchema.parse(request.body);
-    if (body.code !== pairingCode) {
-      return reply.code(401).send({ error: 'Invalid pairing code' });
+    const password = body.password ?? body.code ?? '';
+    if (!secureEquals(password, pairingPassword)) {
+      return reply.code(401).send({ error: 'Invalid password' });
     }
 
     return reply.send({ token: database.issueToken() });
@@ -364,8 +379,18 @@ export async function startServer(config: ResolvedConfig): Promise<void> {
   app.get('/sessions/:id/events', async (request) => {
     const sessionId = (request.params as { id: string }).id;
     sessions.reconcileDetachedSession(sessionId);
-    const afterSeq = Number((request.query as Record<string, string>).afterSeq ?? '0');
-    return database.getEvents(sessionId, afterSeq);
+    const query = request.query as Record<string, string>;
+    const afterSeq = Number(query.afterSeq ?? '0');
+    const beforeSeq = query.beforeSeq != null ? Number(query.beforeSeq) : undefined;
+    const limit = query.limit != null ? Number(query.limit) : undefined;
+    const payloadMode = toSessionEventPayloadMode(query.payload);
+    return database
+      .getEvents(sessionId, {
+        afterSeq,
+        beforeSeq,
+        limit,
+      })
+      .map((event) => viewSessionEvent(event, payloadMode));
   });
 
   app.get('/sessions/:id/runs', async (request, reply) => {
@@ -411,7 +436,9 @@ export async function startServer(config: ResolvedConfig): Promise<void> {
       ),
       session,
       runs: database.listRuns(session.id),
-      events: database.getEvents(session.id, 0),
+      events: database
+        .getEvents(session.id, 0)
+        .map((event) => viewSessionEvent(event, 'full')),
       artifacts: sessions.listArtifacts(session.id),
     };
 
@@ -498,7 +525,10 @@ export async function startServer(config: ResolvedConfig): Promise<void> {
     'Remote host started',
   );
   app.log.info(
-    `Pairing code: ${pairingCode}. Use the Flutter app Pair screen to connect.`,
+    {
+      pairingPasswordEnvVar: PAIRING_PASSWORD_ENV_VAR,
+    },
+    'Pair password loaded from environment. Use the Flutter app Pair screen to connect.',
   );
 }
 

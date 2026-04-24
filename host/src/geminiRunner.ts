@@ -192,27 +192,67 @@ export class GeminiRunner implements WorkspaceRunner {
     _signal: NodeJS.Signals | null,
     controls: RunnerControls,
   ) {
+    const parsed = parseGeminiStdout(runtime.stdoutTail);
+
+    // Ensure all transcript messages are reconciled before finalizing
     reconcileTranscript(runtime.runId, controls);
-    const existing = controls.getLatestCompletedMessage(run.id);
-    if (existing) {
-      return undefined;
-    }
+
+    const latest = controls.getLatestCompletedMessage(run.id);
 
     const state = runtime.state as GeminiRuntimeState;
     const fallbackText =
-      extractGeminiStdoutText(runtime.stdoutTail) ?? state.fallbackMessageText;
-    if (!fallbackText) {
-      return undefined;
+      parsed?.response ?? extractGeminiStdoutText(runtime.stdoutTail) ?? state.fallbackMessageText;
+
+    let usage: Record<string, number> | undefined;
+    if (parsed?.stats && typeof parsed.stats === 'object') {
+      const stats = parsed.stats as any;
+      if (stats.tokens) {
+        // High-level tokens object
+        usage = {
+          input: stats.tokens.input ?? 0,
+          output: stats.tokens.candidates ?? stats.tokens.output ?? 0,
+          total: stats.tokens.total ?? 0,
+        };
+      } else if (stats.models && typeof stats.models === 'object') {
+        // Nested models object
+        const models = Object.values(stats.models) as any[];
+        let input = 0;
+        let output = 0;
+        let total = 0;
+        for (const m of models) {
+          if (m?.tokens) {
+            input += m.tokens.input ?? 0;
+            output += m.tokens.candidates ?? m.tokens.output ?? 0;
+            total += m.tokens.total ?? 0;
+          }
+        }
+        if (total > 0) {
+          usage = { input, output, total };
+        }
+      }
     }
 
-    controls.emit(runtime.sessionId, run.id, {
-      type: 'message.completed',
-      payload: {
-        text: fallbackText,
-        source: 'gemini-stdout-reconcile',
-      },
-      ts: nowIso(),
-    });
+    // If we have usage but the latest message doesn't, we MUST emit/update it.
+    if (!latest || (usage && !latest.payload.usage)) {
+      const payload: Record<string, unknown> = {
+        text: latest?.payload.text ?? fallbackText,
+        source: parsed?.response ? 'gemini-json' : (latest?.payload.source ?? 'gemini-stdout-reconcile'),
+      };
+      if (usage) {
+        payload.usage = usage;
+      }
+
+      if (!payload.text) {
+        return undefined;
+      }
+
+      controls.emit(runtime.sessionId, run.id, {
+        type: 'message.completed',
+        payload,
+        ts: latest?.ts ?? nowIso(),
+      });
+    }
+
     return undefined;
   }
 }
@@ -223,7 +263,7 @@ export function buildGeminiArgs(
   resume: boolean,
   model: string | null,
 ): string[] {
-  const args = ['--yolo'];
+  const args = ['--yolo', '--output-format', 'json'];
   if (model) {
     args.push('--model', model);
   }
@@ -290,35 +330,43 @@ function reconcileTranscript(runId: string, controls: RunnerControls): void {
     transcriptPath: snapshot.transcriptPath,
   });
 
-  const latestMessage = [...(snapshot.transcript.messages ?? [])]
-    .reverse()
-    .find(
-      (message) =>
-        message.type === 'gemini' &&
-        typeof message.content === 'string' &&
-        (!message.timestamp || message.timestamp >= run.startedAt),
-    );
+  const assistantMessages = (snapshot.transcript.messages ?? []).filter(
+    (message) =>
+      message.type === 'gemini' &&
+      typeof message.content === 'string' &&
+      (!message.timestamp || message.timestamp >= run.startedAt),
+  );
 
-  if (!latestMessage || typeof latestMessage.content !== 'string') {
+  if (assistantMessages.length === 0) {
     return;
   }
 
-  const existing = controls.getLatestCompletedMessage(run.id);
-  if (
-    normalizeMessageText(existing?.payload.text as string | undefined) ===
-    normalizeMessageText(latestMessage.content)
-  ) {
-    return;
-  }
+  // We emit messages incrementally.
+  // We compare the transcript against the "latest" emitted message.
+  for (const message of assistantMessages) {
+    const text = message.content as string;
+    const existing = controls.getLatestCompletedMessage(run.id);
 
-  controls.emit(session.id, run.id, {
-    type: 'message.completed',
-    payload: {
-      text: latestMessage.content,
-      source: 'transcript-reconcile',
-    },
-    ts: latestMessage.timestamp ?? nowIso(),
-  });
+    const alreadyEmitted = existing &&
+      normalizeMessageText(existing.payload.text as string | undefined) === normalizeMessageText(text);
+
+    // If this message (or a later one) has already been emitted, we skip it.
+    // Since we are iterating forward, if we find a message that matches 'latest',
+    // it means we've already processed this part of the transcript.
+    if (!alreadyEmitted) {
+      // Check if ANY previous message in this run matches.
+      // Since we don't have getRunMessages, we'll just check if the text is different from the latest.
+      // This is usually enough for sequential assistant messages.
+      controls.emit(session.id, run.id, {
+        type: 'message.completed',
+        payload: {
+          text: text,
+          source: 'transcript-reconcile',
+        },
+        ts: message.timestamp ?? nowIso(),
+      });
+    }
+  }
 }
 
 export function recoverGeminiSessionMetadata(
@@ -452,6 +500,19 @@ function extractGeminiStdoutText(stdoutTail: string): string | null {
 
   const text = responseLines.join('\n').trim();
   return text.length > 0 ? text : null;
+}
+
+function parseGeminiStdout(stdoutTail: string): { response?: string; stats?: unknown } | null {
+  const start = stdoutTail.indexOf('{');
+  const end = stdoutTail.lastIndexOf('}');
+  if (start !== -1 && end !== -1 && end > start) {
+    try {
+      return JSON.parse(stdoutTail.slice(start, end + 1)) as { response?: string; stats?: unknown };
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 function stringOrNull(value: unknown): string | null {

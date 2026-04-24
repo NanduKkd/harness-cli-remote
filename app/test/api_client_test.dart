@@ -32,6 +32,19 @@ http.StreamedResponse jsonResponse(
   );
 }
 
+http.StreamedResponse jsonListResponse(
+  List<Map<String, dynamic>> body, {
+  int statusCode = 200,
+  http.BaseRequest? request,
+}) {
+  return http.StreamedResponse(
+    Stream<List<int>>.value(utf8.encode(jsonEncode(body))),
+    statusCode,
+    headers: const {'content-type': 'application/json'},
+    request: request,
+  );
+}
+
 void main() {
   const auth = AuthSession(
     baseUrl: 'http://127.0.0.1:8918',
@@ -56,6 +69,26 @@ void main() {
       prefixedAuth.websocketUri.toString(),
       'ws://127.0.0.1:8918/ieb8izzxc0bt/ws?token=test-token',
     );
+  });
+
+  test('pair sends the configured password in the request body', () async {
+    late http.Request request;
+    final client = RecordingHttpClient((incoming) async {
+      request = incoming as http.Request;
+      return jsonResponse({'token': 'paired-token'}, request: incoming);
+    });
+
+    final token = await ApiClient.pair(
+      baseUrl: auth.baseUrl,
+      password: 'my-secret-password',
+      client: client,
+    );
+
+    expect(token, 'paired-token');
+    expect(request.method, 'POST');
+    expect(request.url.path, '/pair');
+    expect(request.headers['content-type'], 'application/json');
+    expect(jsonDecode(request.body), {'password': 'my-secret-password'});
   });
 
   test(
@@ -182,26 +215,64 @@ void main() {
     );
   });
 
-  test('sendPrompt surfaces the backend message for generic 500 responses', () async {
+  test('getEvents requests summary payloads', () async {
+    late http.BaseRequest request;
     final client = RecordingHttpClient((incoming) async {
-      return jsonResponse({
-        'statusCode': 500,
-        'error': 'Internal Server Error',
-        'message':
-            'This session cannot be resumed because Gemini did not persist a session id.',
-      }, statusCode: 500, request: incoming);
+      request = incoming;
+      return jsonListResponse([
+        {
+          'sessionId': 'session-123',
+          'runId': 'run-1',
+          'seq': 1,
+          'type': 'tool.completed',
+          'ts': '2026-04-14T12:00:00.000Z',
+          'payload': {
+            'toolName': 'Read',
+            'success': true,
+            'toolResponseSummary': 'summary',
+          },
+        },
+      ], request: incoming);
     });
     final api = ApiClient(auth, client: client);
 
-    expect(
-      () => api.sendPrompt(sessionId: 'session-123', prompt: 'follow up'),
-      throwsA(
-        isA<ApiException>().having(
-          (error) => error.message,
-          'message',
-          'This session cannot be resumed because Gemini did not persist a session id.',
-        ),
-      ),
-    );
+    final events = await api.getEvents(sessionId: 'session-123', afterSeq: 42);
+
+    expect(events.single.payload['toolResponseSummary'], 'summary');
+    expect(request.url.path, '/sessions/session-123/events');
+    expect(request.url.queryParameters, {
+      'afterSeq': '42',
+      'payload': 'summary',
+    });
   });
+
+  test(
+    'sendPrompt surfaces the backend message for generic 500 responses',
+    () async {
+      final client = RecordingHttpClient((incoming) async {
+        return jsonResponse(
+          {
+            'statusCode': 500,
+            'error': 'Internal Server Error',
+            'message':
+                'This session cannot be resumed because Gemini did not persist a session id.',
+          },
+          statusCode: 500,
+          request: incoming,
+        );
+      });
+      final api = ApiClient(auth, client: client);
+
+      expect(
+        () => api.sendPrompt(sessionId: 'session-123', prompt: 'follow up'),
+        throwsA(
+          isA<ApiException>().having(
+            (error) => error.message,
+            'message',
+            'This session cannot be resumed because Gemini did not persist a session id.',
+          ),
+        ),
+      );
+    },
+  );
 }

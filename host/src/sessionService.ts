@@ -12,8 +12,10 @@ import path from 'node:path';
 import type { FastifyBaseLogger } from 'fastify';
 
 import { AppDatabase } from './db.js';
+import { ClaudeRunner } from './claudeRunner.js';
 import { CodexRunner } from './codexRunner.js';
 import { GeminiRunner, recoverGeminiSessionMetadata } from './geminiRunner.js';
+import { viewSessionEvent } from './sessionEvents.js';
 import type { RunnerControls, RuntimeRun, WorkspaceRunner } from './runners.js';
 import type {
   ArtifactRecord,
@@ -53,6 +55,7 @@ export class SessionService {
   private readonly runners = new Map<WorkspaceProvider, WorkspaceRunner>([
     ['gemini', new GeminiRunner()],
     ['codex', new CodexRunner()],
+    ['claude', new ClaudeRunner()],
   ]);
   private readonly controls: RunnerControls;
 
@@ -108,8 +111,9 @@ export class SessionService {
     }
 
     if (!session.providerSessionId) {
+      const providerLabel = providerDisplayName(workspace.provider);
       throw new SessionServiceError(
-        'This session cannot be resumed because Gemini did not persist a session id. Repair the workspace hooks and start a new session.',
+        `This session cannot be resumed because ${providerLabel} did not persist a session id. Repair the workspace hooks and start a new session.`,
         409,
       );
     }
@@ -481,7 +485,7 @@ export class SessionService {
       type: 'session.event',
       sessionId,
       workspaceId: session.workspaceId,
-      event: inserted,
+      event: viewSessionEvent(inserted, 'summary'),
     });
     return inserted;
   }
@@ -686,5 +690,25 @@ function formatSpawnError(
     ].join(' ');
   }
 
+  if (provider === 'claude') {
+    return [
+      'Unable to launch Claude Code CLI.',
+      'Set CLAUDE_BIN or ensure claude is available on the host PATH.',
+      `Original error: ${error.message}`,
+    ].join(' ');
+  }
+
   return error.message;
+}
+
+function providerDisplayName(provider: WorkspaceProvider): string {
+  if (provider === 'codex') {
+    return 'Codex';
+  }
+
+  if (provider === 'claude') {
+    return 'Claude Code';
+  }
+
+  return 'Gemini';
 }

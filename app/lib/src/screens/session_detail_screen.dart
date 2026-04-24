@@ -30,6 +30,8 @@ class SessionDetailScreen extends ConsumerStatefulWidget {
 
 class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
   static const double _bottomScrollThreshold = 32;
+  static const double _topPaginationThreshold = 160;
+  static const int _conversationPageSize = 50;
   final List<SessionEvent> _events = [];
   final ScrollController _conversationScrollController = ScrollController();
   late final TextEditingController _promptController;
@@ -41,6 +43,8 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
   bool _sending = false;
   bool _exporting = false;
   bool _deleting = false;
+  bool _loadingOlderEvents = false;
+  bool _hasOlderEvents = true;
   bool _stickConversationToBottom = true;
   String? _error;
   int _lastSeq = 0;
@@ -69,7 +73,7 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
         await _fetchEvents(afterSeq: _lastSeq);
       }
     });
-    unawaited(_fetchEvents(afterSeq: 0, forceScrollToBottom: true));
+    unawaited(_fetchLatestEvents(forceScrollToBottom: true));
   }
 
   @override
@@ -387,6 +391,8 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
           }
         case 'message.completed':
           final text = _textOrNull(event.payload['text']);
+          final usageMap = event.payload['usage'] as Map<String, dynamic>?;
+          final usage = usageMap != null ? TokenUsage.fromJson(usageMap) : null;
           if (text != null) {
             _appendEntry(
               entries,
@@ -394,6 +400,7 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
                 title: providerDisplayName(widget.workspace.provider),
                 text: text,
                 ts: event.ts,
+                usage: usage,
               ),
             );
           }
@@ -458,6 +465,11 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
             ),
           );
         case 'notification':
+          final legacyFileChange = _legacyFileChangeToolEntry(event);
+          if (legacyFileChange != null) {
+            entries.add(legacyFileChange);
+            break;
+          }
           final notificationText = [
             _textOrNull(event.payload['message']),
             _prettySummary(event.payload['details']),
@@ -590,6 +602,52 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
     await _fetchEvents(afterSeq: _lastSeq, forceScrollToBottom: true);
   }
 
+  Future<void> _fetchLatestEvents({bool forceScrollToBottom = false}) async {
+    final api = ref.read(apiClientProvider);
+    if (api == null) {
+      return;
+    }
+
+    try {
+      final events = await api.getEvents(
+        sessionId: widget.session.id,
+        limit: _conversationPageSize,
+      );
+      if (!mounted) {
+        return;
+      }
+
+      final shouldAutoScroll =
+          forceScrollToBottom || _shouldKeepConversationPinnedToBottom();
+      setState(() {
+        _loading = false;
+        _error = null;
+        _events
+          ..clear()
+          ..addAll(events);
+        _hasOlderEvents = events.isNotEmpty && events.first.seq > 1;
+        if (_events.isNotEmpty) {
+          _lastSeq = _events.last.seq;
+        }
+      });
+      if (shouldAutoScroll) {
+        _stickConversationToBottom = true;
+        _scheduleScrollToConversationBottom(force: forceScrollToBottom);
+      }
+      if (events.any((event) => _eventAffectsSessionSummary(event.type))) {
+        ref.invalidate(sessionsProvider(widget.workspace.id));
+      }
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _loading = false;
+        _error = error.toString();
+      });
+    }
+  }
+
   Future<void> _fetchEvents({
     required int afterSeq,
     bool forceScrollToBottom = false,
@@ -652,6 +710,9 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
 
   void _handleConversationScroll() {
     _stickConversationToBottom = _isNearConversationBottom();
+    if (_shouldLoadOlderEvents()) {
+      unawaited(_loadOlderEvents());
+    }
   }
 
   void _mergeEvents(List<SessionEvent> incoming) {
@@ -680,6 +741,98 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
       return true;
     }
     return position.maxScrollExtent - position.pixels <= _bottomScrollThreshold;
+  }
+
+  bool _shouldLoadOlderEvents() {
+    if (_loading || _loadingOlderEvents || !_hasOlderEvents || _events.isEmpty) {
+      return false;
+    }
+    if (!_conversationScrollController.hasClients) {
+      return false;
+    }
+    final position = _conversationScrollController.position;
+    if (!position.hasContentDimensions) {
+      return false;
+    }
+    return position.pixels <= _topPaginationThreshold;
+  }
+
+  Future<void> _loadOlderEvents() async {
+    final api = ref.read(apiClientProvider);
+    if (api == null || _events.isEmpty || _loadingOlderEvents || !_hasOlderEvents) {
+      return;
+    }
+
+    final oldestSeq = _events.first.seq;
+    if (oldestSeq <= 1) {
+      if (mounted) {
+        setState(() {
+          _hasOlderEvents = false;
+        });
+      }
+      return;
+    }
+
+    final previousPixels = _conversationScrollController.hasClients
+        ? _conversationScrollController.position.pixels
+        : null;
+    final previousMaxExtent = _conversationScrollController.hasClients &&
+            _conversationScrollController.position.hasContentDimensions
+        ? _conversationScrollController.position.maxScrollExtent
+        : null;
+
+    setState(() {
+      _loadingOlderEvents = true;
+    });
+
+    try {
+      final events = await api.getEvents(
+        sessionId: widget.session.id,
+        beforeSeq: oldestSeq,
+        limit: _conversationPageSize,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _loadingOlderEvents = false;
+        _error = null;
+        _mergeEvents(events);
+        _hasOlderEvents = events.length == _conversationPageSize && _events.first.seq > 1;
+      });
+      _preserveScrollOffset(
+        previousPixels: previousPixels,
+        previousMaxExtent: previousMaxExtent,
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _loadingOlderEvents = false;
+        _error = error.toString();
+      });
+    }
+  }
+
+  void _preserveScrollOffset({
+    required double? previousPixels,
+    required double? previousMaxExtent,
+  }) {
+    if (previousPixels == null || previousMaxExtent == null) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_conversationScrollController.hasClients) {
+        return;
+      }
+      final position = _conversationScrollController.position;
+      if (!position.hasContentDimensions) {
+        return;
+      }
+      final delta = position.maxScrollExtent - previousMaxExtent;
+      _conversationScrollController.jumpTo(previousPixels + delta);
+    });
   }
 
   void _scheduleScrollToConversationBottom({bool force = false}) {
@@ -1076,6 +1229,26 @@ String? _selectedModelFromSheet({
   return selectedValue;
 }
 
+class TokenUsage {
+  const TokenUsage({
+    required this.input,
+    required this.output,
+    required this.total,
+  });
+
+  factory TokenUsage.fromJson(Map<String, dynamic> json) {
+    return TokenUsage(
+      input: json['input'] as int? ?? 0,
+      output: json['output'] as int? ?? 0,
+      total: json['total'] as int? ?? 0,
+    );
+  }
+
+  final int input;
+  final int output;
+  final int total;
+}
+
 class _TranscriptEntry {
   const _TranscriptEntry._({
     required this.kind,
@@ -1087,6 +1260,7 @@ class _TranscriptEntry {
     this.requestSummary,
     this.responseSummary,
     this.tone,
+    this.usage,
   });
 
   factory _TranscriptEntry.user({required String text, required DateTime ts}) {
@@ -1103,6 +1277,7 @@ class _TranscriptEntry {
     required String text,
     required DateTime ts,
     bool isLive = false,
+    TokenUsage? usage,
   }) {
     return _TranscriptEntry._(
       kind: _TranscriptEntryKind.assistant,
@@ -1110,6 +1285,7 @@ class _TranscriptEntry {
       text: text,
       ts: ts,
       isLive: isLive,
+      usage: usage,
     );
   }
 
@@ -1154,6 +1330,7 @@ class _TranscriptEntry {
   final String? requestSummary;
   final String? responseSummary;
   final _SystemTone? tone;
+  final TokenUsage? usage;
 
   _TranscriptEntry copyWithTool({
     required DateTime ts,
@@ -1167,12 +1344,17 @@ class _TranscriptEntry {
       state: state,
       requestSummary: requestSummary,
       responseSummary: responseSummary,
+      usage: usage,
     );
   }
 }
 
 void _appendEntry(List<_TranscriptEntry> entries, _TranscriptEntry next) {
   if (entries.isNotEmpty && _isDuplicateConversationEntry(entries.last, next)) {
+    if (next.usage != null && entries.last.usage == null) {
+      entries.removeLast();
+      entries.add(next);
+    }
     return;
   }
   entries.add(next);
@@ -1308,6 +1490,19 @@ class _MessageBubble extends StatelessWidget {
                     Text(entry.text ?? '', style: textStyle)
                   else
                     SelectableText(entry.text ?? '', style: textStyle),
+                  if (entry.kind == _TranscriptEntryKind.assistant)
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: Text(
+                        entry.usage != null
+                            ? '${_formatTokens(entry.usage!.total)} tokens (${_formatTokens(entry.usage!.input)} in / ${_formatTokens(entry.usage!.output)} out)'
+                            : 'No usage data',
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: foregroundColor.withValues(alpha: 0.42),
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -1490,6 +1685,9 @@ MarkdownStyleSheet _markdownStyleSheet(
 
 IconData _toolIcon(String toolName) {
   final normalized = toolName.toLowerCase();
+  if (normalized.contains('file')) {
+    return Icons.description_outlined;
+  }
   if (normalized.contains('web')) {
     return Icons.public_rounded;
   }
@@ -1690,6 +1888,28 @@ String _humanize(String key) {
   return '${withSpaces[0].toUpperCase()}${withSpaces.substring(1)}';
 }
 
+_TranscriptEntry? _legacyFileChangeToolEntry(SessionEvent event) {
+  final notificationType = _textOrNull(event.payload['notificationType']);
+  if (notificationType != 'file_change') {
+    return null;
+  }
+
+  final details = _normalizeValue(event.payload['details']);
+  final detailMap = details is Map ? Map<String, dynamic>.from(details) : null;
+
+  return _TranscriptEntry.tool(
+    toolName: 'File Change',
+    ts: event.ts,
+    state: _ToolState.completed,
+    requestSummary: _prettySummary({
+      'changes': detailMap?['changes'],
+    }),
+    responseSummary: _prettySummary({
+      'status': detailMap?['status'] ?? 'completed',
+    }),
+  );
+}
+
 String? _textOrNull(Object? value) {
   final text = value?.toString().trim();
   if (text == null || text.isEmpty || text == 'null') {
@@ -1715,4 +1935,17 @@ String _formatTime(DateTime value) {
   final minute = value.minute.toString().padLeft(2, '0');
   final suffix = value.hour >= 12 ? 'PM' : 'AM';
   return '${value.month}/${value.day} $hour:$minute $suffix';
+}
+
+String _formatTokens(int count) {
+  if (count >= 1000000) {
+    final value = count / 1000000;
+    final formatted = value.toStringAsFixed(1);
+    return '${formatted.endsWith('.0') ? formatted.substring(0, formatted.length - 2) : formatted}M';
+  } else if (count >= 1000) {
+    final value = count / 1000;
+    final formatted = value.toStringAsFixed(1);
+    return '${formatted.endsWith('.0') ? formatted.substring(0, formatted.length - 2) : formatted}K';
+  }
+  return '$count';
 }

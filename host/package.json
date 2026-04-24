@@ -1,7 +1,7 @@
 {
   "name": "gemini-remote-host",
   "version": "0.1.0",
-  "description": "Host daemon for remotely controlling Gemini CLI and Codex CLI over hooks, JSONL streaming, and resume mode.",
+  "description": "Host daemon for remotely controlling Gemini CLI, Codex CLI, and Claude Code CLI over hooks, streaming, and resume mode.",
   "main": "dist/cli.js",
   "scripts": {
     "dev": "tsx src/cli.ts",
@@ -13,6 +13,7 @@
   "keywords": [
     "gemini-cli",
     "codex-cli",
+    "claude-code",
     "fastify",
     "flutter",
     "hooks"

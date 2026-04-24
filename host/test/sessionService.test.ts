@@ -90,6 +90,76 @@ test('SessionService resumes a Codex session using the saved provider session id
   );
 });
 
+test('SessionService creates a Claude session and persists the provider session id', { concurrency: false }, async (t) => {
+  const harness = await createHarness(t, { provider: 'claude' });
+
+  const session = harness.service.createSession(
+    harness.workspace.id,
+    'success scenario',
+    'claude-sonnet-4-6',
+  );
+  const run = await waitFor(
+    () => harness.database.getRunOrThrow(session.lastRunId!),
+    (value) => value.status !== 'running',
+  );
+  const updatedSession = harness.database.getSessionOrThrow(session.id);
+  const events = harness.database.getEvents(session.id);
+
+  assert.equal(run.status, 'completed');
+  assert.equal(run.model, 'claude-sonnet-4-6');
+  assert.equal(updatedSession.model, 'claude-sonnet-4-6');
+  assert.equal(updatedSession.providerSessionId, session.id);
+  assert.ok(events.some((event) => event.type == 'session.started'));
+  assert.ok(
+    events.some(
+      (event) =>
+        event.type == 'message.completed' &&
+        event.payload.text == 'hello from claude',
+    ),
+  );
+});
+
+test('SessionService resumes a Claude session using the saved provider session id', { concurrency: false }, async (t) => {
+  const harness = await createHarness(t, { provider: 'claude' });
+
+  const initialSession = harness.service.createSession(
+    harness.workspace.id,
+    'success scenario',
+    'claude-sonnet-4-6',
+  );
+  await waitFor(
+    () => harness.database.getRunOrThrow(initialSession.lastRunId!),
+    (value) => value.status !== 'running',
+  );
+
+  const resumedSession = harness.service.sendPrompt(
+    initialSession.id,
+    'resume scenario',
+    'sonnet',
+  );
+  const resumedRun = await waitFor(
+    () => harness.database.getRunOrThrow(resumedSession.lastRunId!),
+    (value) => value.status !== 'running',
+  );
+  const resumedEvents = harness.database
+    .getEvents(initialSession.id)
+    .filter((event) => event.runId === resumedRun.id);
+
+  assert.equal(resumedRun.status, 'completed');
+  assert.equal(resumedRun.model, 'sonnet');
+  assert.equal(
+    harness.database.getSessionOrThrow(initialSession.id).model,
+    'sonnet',
+  );
+  assert.ok(
+    resumedEvents.some(
+      (event) =>
+        event.type == 'message.completed' &&
+        event.payload.text == `resumed:${initialSession.id}`,
+    ),
+  );
+});
+
 test('SessionService recovers a Gemini session id from the transcript before resuming', { concurrency: false }, async (t) => {
   const harness = await createHarness(t, { provider: 'gemini' });
   const session = harness.database.createSession(randomUUID(), harness.workspace.id);
@@ -467,6 +537,40 @@ test('SessionService reports an actionable error when the Codex executable canno
   assert.match(run.stderrTail, /CODEX_BIN/);
 });
 
+test('SessionService reports an actionable error when the Claude executable cannot be launched', { concurrency: false }, async (t) => {
+  const missingClaudePath = path.join(
+    '/tmp',
+    `claude-missing-${randomUUID()}`,
+  );
+  const previousClaudeBin = process.env.CLAUDE_BIN;
+  process.env.CLAUDE_BIN = missingClaudePath;
+  t.after(() => {
+    if (previousClaudeBin === undefined) {
+      delete process.env.CLAUDE_BIN;
+      return;
+    }
+    process.env.CLAUDE_BIN = previousClaudeBin;
+  });
+
+  const harness = await createHarness(t, {
+    provider: 'claude',
+    installClaudeStub: false,
+  });
+
+  const session = harness.service.createSession(
+    harness.workspace.id,
+    'missing claude binary scenario',
+  );
+  const run = await waitFor(
+    () => harness.database.getRunOrThrow(session.lastRunId!),
+    (value) => value.status !== 'running',
+  );
+
+  assert.equal(run.status, 'failed');
+  assert.match(run.stderrTail, /Unable to launch Claude Code CLI/);
+  assert.match(run.stderrTail, /CLAUDE_BIN/);
+});
+
 test('SessionService reconciles a detached running session', { concurrency: false }, async (t) => {
   const harness = await createHarness(t);
 
@@ -654,6 +758,7 @@ test('SessionService cleans stored artifact directories when deleting a session'
 async function createHarness(
   t: test.TestContext,
   options: {
+    installClaudeStub?: boolean;
     installCodexStub?: boolean;
     installGeminiStub?: boolean;
     provider?: WorkspaceProvider;
@@ -675,10 +780,14 @@ async function createHarness(
   const databasePath = path.join(tempDir, 'data', 'app.sqlite');
   const artifactsRoot = path.join(tempDir, 'artifacts');
   const provider = options.provider ?? 'codex';
+  const installClaudeStub = options.installClaudeStub ?? provider === 'claude';
   const installCodexStub = options.installCodexStub ?? provider === 'codex';
   const installGeminiStub = options.installGeminiStub ?? provider === 'gemini';
   await mkdir(workspaceDir, { recursive: true });
   await mkdir(binDir, { recursive: true });
+  if (installClaudeStub) {
+    await writeStubClaude(path.join(binDir, 'claude'));
+  }
   if (installCodexStub) {
     await writeStubCodex(path.join(binDir, 'codex'));
   }
@@ -687,7 +796,7 @@ async function createHarness(
   }
 
   const previousPath = process.env.PATH;
-  process.env.PATH = installCodexStub || installGeminiStub
+  process.env.PATH = installClaudeStub || installCodexStub || installGeminiStub
     ? `${binDir}:${previousPath ?? ''}`
     : previousPath ?? '';
   t.after(() => {
@@ -822,6 +931,64 @@ if (prompt.includes('cancel tree')) {
       output_tokens: 1,
     },
   });
+}
+`,
+  );
+  await chmod(filePath, 0o755);
+}
+
+async function writeStubClaude(filePath: string): Promise<void> {
+  const treeHelperProgram = `
+const { appendFileSync, writeFileSync } = require('node:fs');
+const heartbeatPath = process.env.CLAUDE_TREE_HEARTBEAT_PATH;
+const pidPath = process.env.CLAUDE_TREE_PID_PATH;
+if (pidPath) {
+  writeFileSync(pidPath, String(process.pid));
+}
+setInterval(() => {
+  if (heartbeatPath) {
+    appendFileSync(heartbeatPath, '.');
+  }
+}, 100);
+`;
+  await writeFile(
+    filePath,
+    `#!/usr/bin/env node
+const { spawn } = require('node:child_process');
+const args = process.argv.slice(2);
+const prompt = args.at(-1) ?? '';
+const sessionIndex = args.indexOf('--session-id');
+const resumeIndex = args.indexOf('--resume');
+const sessionId =
+  sessionIndex !== -1 && sessionIndex + 1 < args.length
+    ? args[sessionIndex + 1]
+    : null;
+const resumeId =
+  resumeIndex !== -1 && resumeIndex + 1 < args.length
+    ? args[resumeIndex + 1]
+    : null;
+
+if (prompt.includes('cancel tree')) {
+  const helper = spawn(process.execPath, ['-e', ${JSON.stringify(
+    treeHelperProgram,
+  )}], {
+    env: process.env,
+    stdio: 'ignore',
+  });
+  helper.unref();
+  process.on('SIGINT', () => process.exit(130));
+  setInterval(() => {}, 1000);
+} else if (prompt.includes('cancel')) {
+  process.on('SIGINT', () => process.exit(130));
+  setInterval(() => {}, 1000);
+} else {
+  process.stdout.write(
+    JSON.stringify({
+      session_id: resumeId ?? sessionId ?? 'claude-session-1',
+      result: resumeId ? 'resumed:' + resumeId : 'hello from claude',
+    }) + '\\n'
+  );
+  process.exit(0);
 }
 `,
   );

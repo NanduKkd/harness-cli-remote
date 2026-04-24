@@ -17,6 +17,8 @@ import { nowIso, summarizeJson } from './util.js';
 type CodexRuntimeState = {
   lineBuffer: string;
   messageTextByItemId: Map<string, string>;
+  latestMessageItemId: string | null;
+  pendingCompletedMessageItemId: string | null;
   startedToolIds: Set<string>;
   sessionStartedEventEmitted: boolean;
   turnFailed: boolean;
@@ -87,6 +89,8 @@ export class CodexRunner implements WorkspaceRunner {
       state: {
         lineBuffer: '',
         messageTextByItemId: new Map(),
+        latestMessageItemId: null,
+        pendingCompletedMessageItemId: null,
         startedToolIds: new Set(),
         sessionStartedEventEmitted: false,
         turnFailed: false,
@@ -244,6 +248,34 @@ export class CodexRunner implements WorkspaceRunner {
         });
         break;
       }
+      case 'turn.completed': {
+        const usage = event.usage as Record<string, number> | undefined;
+        let payloadUsage: Record<string, number> | undefined;
+        if (usage && typeof usage.input_tokens === 'number' && typeof usage.output_tokens === 'number') {
+          payloadUsage = {
+            input: usage.input_tokens + (usage.cached_input_tokens || 0),
+            output: usage.output_tokens,
+            total: usage.input_tokens + (usage.cached_input_tokens || 0) + usage.output_tokens,
+          };
+        }
+
+        const latestMessageText = state.pendingCompletedMessageItemId
+          ? state.messageTextByItemId.get(state.pendingCompletedMessageItemId)
+          : null;
+        if (latestMessageText) {
+          controls.emit(runtime.sessionId, runtime.runId, {
+            type: 'message.completed',
+            payload: {
+              text: latestMessageText,
+              source: 'codex-jsonl',
+              ...(payloadUsage ? { usage: payloadUsage } : {}),
+            },
+            ts,
+          });
+          state.pendingCompletedMessageItemId = null;
+        }
+        break;
+      }
       case 'item.started':
       case 'item.completed': {
         const item = event.item;
@@ -276,6 +308,7 @@ export class CodexRunner implements WorkspaceRunner {
 
       const previous = state.messageTextByItemId.get(itemId) ?? '';
       state.messageTextByItemId.set(itemId, text);
+      state.latestMessageItemId = itemId;
 
       if (previous && text.startsWith(previous) && text.length > previous.length) {
         controls.emit(runtime.sessionId, runtime.runId, {
@@ -289,14 +322,23 @@ export class CodexRunner implements WorkspaceRunner {
       }
 
       if (eventType === 'item.completed') {
-        controls.emit(runtime.sessionId, runtime.runId, {
-          type: 'message.completed',
-          payload: {
-            text,
-            source: 'codex-jsonl',
-          },
-          ts,
-        });
+        if (
+          state.pendingCompletedMessageItemId &&
+          state.pendingCompletedMessageItemId !== itemId
+        ) {
+          const pendingText = state.messageTextByItemId.get(state.pendingCompletedMessageItemId);
+          if (pendingText) {
+            controls.emit(runtime.sessionId, runtime.runId, {
+              type: 'message.completed',
+              payload: {
+                text: pendingText,
+                source: 'codex-jsonl',
+              },
+              ts,
+            });
+          }
+        }
+        state.pendingCompletedMessageItemId = itemId;
       }
       return;
     }
@@ -481,6 +523,19 @@ function describeToolItem(
         status: item.status ?? null,
       },
       success: exitCode === null || exitCode === 0,
+    };
+  }
+
+  if (itemType === 'file_change') {
+    return {
+      name: 'File Change',
+      input: {
+        changes: item.changes ?? null,
+      },
+      response: {
+        status: item.status ?? null,
+      },
+      success: !item.error,
     };
   }
 
